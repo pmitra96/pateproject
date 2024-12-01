@@ -1,11 +1,11 @@
-package models
+package model
 
 import (
 	"time"
 )
 
-// Ingredient represents an ingredient in the system.
-type Ingredient struct {
+// Item represents an ingredient in the system.
+type Item struct {
 	ID              uint    `gorm:"primaryKey" json:"id"`
 	Name            string  `gorm:"size:255;not null" json:"name"`
 	Category        string  `gorm:"size:255" json:"category"`
@@ -23,9 +23,12 @@ type Unit struct {
 
 // User represents an application user.
 type User struct {
-	ID    uint   `gorm:"primaryKey" json:"id"`
-	Name  string `gorm:"size:255;not null" json:"name"`
-	Email string `gorm:"size:255;unique;not null" json:"email"`
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Name      string    `gorm:"size:255;not null" json:"name"`
+	Email     string    `gorm:"size:255;unique;not null" json:"email"`
+	Password  []byte    `gorm:"type:bytea;not null" json:"-"` // Hide password from JSON
+	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 }
 
 // UserInventory represents the inventory of a user.
