@@ -1,0 +1,44 @@
+*.log
+
+# Environment and secrets
+.env
+.env.local
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+.venv/
+
+# PDFs (test files)
+*.pdf
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+main
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
