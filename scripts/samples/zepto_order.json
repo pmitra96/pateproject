@@ -1,0 +1,18 @@
+{
+    "user_id": 1,
+    "external_order_id": "ORD_ZEP_12345",
+    "provider": "zepto",
+    "order_date": "2024-02-07T12:00:00Z",
+    "items": [
+        {
+            "raw_name": "Amul Taaza Toned Milk 500ml",
+            "quantity": 2,
+            "unit": "packet"
+        },
+        {
+            "raw_name": "Nandini Curd 200g",
+            "quantity": 1,
+            "unit": "cup"
+        }
+    ]
+}

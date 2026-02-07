@@ -1,0 +1,9 @@
+# PateProject Agentic Rules
+
+- **API Verification**: After building or modifying a backend API endpoint, always use a `curl` command (or similar) to test the basic "happy case" and verify the response status and payload.
+- **Go Best Practices**:
+    - Use `github.com/pmitra96/pateproject/logger` (structured logging with `slog`) for all application logs.
+    - Prefer Go-native libraries for file processing and extraction to ensure scalability.
+- **Frontend Best Practices**:
+    - Use Vanilla CSS for styling.
+    - Ensure all interactive elements have unique IDs for testing.

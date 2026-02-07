@@ -1,0 +1,66 @@
+const API_BASE = 'http://localhost:8080';
+
+const getAuthHeader = () => {
+  const token = localStorage.getItem('token');
+  // For the simplified backend, token is the user ID if not a real JWT
+  // But we use 'Bearer <token>' as expected by middleware
+  return token ? { 'Authorization': `Bearer ${token}` } : {};
+};
+
+export const fetchPantry = async () => {
+  const res = await fetch(`${API_BASE}/pantry`, {
+    headers: getAuthHeader()
+  });
+  if (!res.ok) throw new Error('Failed to fetch pantry');
+  return res.json();
+};
+
+export const updatePantryItem = async (itemID, manualQuantity) => {
+  const res = await fetch(`${API_BASE}/pantry/${itemID}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({ manual_quantity: manualQuantity })
+  });
+  if (!res.ok) throw new Error('Failed to update item');
+};
+
+export const fetchLowStock = async () => {
+  const res = await fetch(`${API_BASE}/pantry/low-stock`, {
+    headers: getAuthHeader()
+  });
+  if (!res.ok) throw new Error('Failed to fetch low stock');
+  return res.json();
+};
+
+export const extractItems = async (file) => {
+  const formData = new FormData();
+  formData.append('invoice', file);
+
+  const response = await fetch(`${API_BASE}/items/extract`, {
+    method: 'POST',
+    headers: getAuthHeader(),
+    body: formData,
+  });
+
+  if (!response.ok) throw new Error('Extraction failed');
+  return response.json();
+};
+
+export const ingestOrder = async (orderData) => {
+  // We need to inject the user_id from the token/state
+  // For now, assume the backend extraction return include it or we add it here
+  const response = await fetch(`${API_BASE}/ingest/order`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Key': 'secret-key',
+    },
+    body: JSON.stringify(orderData),
+  });
+
+  if (!response.ok) throw new Error('Ingestion failed');
+  return response.json();
+};
