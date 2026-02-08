@@ -72,3 +72,19 @@ export const ingestOrder = async (orderData) => {
   if (!response.ok) throw new Error('Ingestion failed');
   return response.json();
 };
+
+export const suggestMeal = async (inventory) => {
+  const response = await fetch(`${API_BASE}/llm/suggest-meal`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ inventory }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || 'Failed to get meal suggestions');
+  }
+  return response.json();
+};

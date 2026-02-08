@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { GoogleLogin } from '@react-oauth/google';
 import { jwtDecode } from 'jwt-decode';
-import { fetchPantry, updatePantryItem, deletePantryItem, extractItems, ingestOrder } from './api';
+import { fetchPantry, updatePantryItem, deletePantryItem, extractItems, ingestOrder, suggestMeal } from './api';
 
 function App() {
   const [pantry, setPantry] = useState([]);
@@ -16,6 +16,8 @@ function App() {
   const [user, setUser] = useState(null);
   const [extractionResult, setExtractionResult] = useState(null);
   const [isExtracting, setIsExtracting] = useState(false);
+  const [mealSuggestions, setMealSuggestions] = useState(null);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -147,6 +149,28 @@ function App() {
     item.item.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const handleSuggestMeal = async () => {
+    if (pantry.length === 0) {
+      alert('No items in pantry to suggest meals from');
+      return;
+    }
+    setIsLoadingSuggestions(true);
+    try {
+      const inventory = pantry.map(item => ({
+        name: item.item.name,
+        quantity: item.effective_quantity,
+        unit: item.item.unit
+      }));
+      const result = await suggestMeal(inventory);
+      setMealSuggestions(result.suggestions);
+    } catch (err) {
+      console.error('Failed to get meal suggestions', err);
+      alert('Failed to get meal suggestions: ' + err.message);
+    } finally {
+      setIsLoadingSuggestions(false);
+    }
+  };
+
   return (
     <div className="App">
       <header className="flex-between mb-8">
@@ -183,14 +207,26 @@ function App() {
 
       {activeTab === 'inventory' && (
         <section>
-          <div className="search-container">
-            <span style={{ position: 'absolute', left: '0.75rem', top: '0.55rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>🔍</span>
-            <input
-              className="search-input"
-              placeholder="Search pantry..."
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-            />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+            <div className="search-container" style={{ marginBottom: 0 }}>
+              <span style={{ position: 'absolute', left: '0.75rem', top: '0.55rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>🔍</span>
+              <input
+                className="search-input"
+                placeholder="Search pantry..."
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+              />
+            </div>
+            {user && pantry.length > 0 && (
+              <button 
+                className="btn" 
+                onClick={handleSuggestMeal}
+                disabled={isLoadingSuggestions}
+                style={{ whiteSpace: 'nowrap' }}
+              >
+                {isLoadingSuggestions ? '✨ Thinking...' : '✨ Suggest a Meal'}
+              </button>
+            )}
           </div>
 
           {loading ? (
@@ -345,6 +381,28 @@ function App() {
             <div className="flex-between">
               <button className="btn btn-secondary" onClick={() => setDeletingItem(null)}>Cancel</button>
               <button className="btn" style={{ background: 'var(--danger)' }} onClick={handleConfirmDelete}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mealSuggestions && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div className="glass-panel p-6" style={{ width: '500px', maxHeight: '80vh', overflow: 'auto' }}>
+            <div className="flex-between mb-4">
+              <h2 style={{ margin: 0 }}>✨ Meal Suggestions</h2>
+              <button 
+                onClick={() => setMealSuggestions(null)} 
+                style={{ background: 'transparent', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-secondary)' }}
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+              {mealSuggestions}
+            </div>
+            <div style={{ marginTop: '1.5rem', textAlign: 'right' }}>
+              <button className="btn" onClick={() => setMealSuggestions(null)}>Close</button>
             </div>
           </div>
         </div>

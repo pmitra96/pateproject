@@ -1,4 +1,6 @@
 #!/bin/bash
+# PateProject Development Server
+# Quick start: ./start.sh (or source nvm and run ./dev.sh directly)
 
 # Function to kill background processes on script exit
 cleanup() {
@@ -23,6 +25,9 @@ if [ -f .env ]; then
   source .env
   set +a
 fi
+
+# Ensure PostgreSQL binaries are in PATH
+export PATH="/opt/homebrew/opt/postgresql@15/bin:$PATH"
 
 echo "🚀 Starting PateProject Development Environment (Local Only)..."
 
@@ -50,7 +55,7 @@ BACKEND_PID=$!
 
 # 3. Start Python Extractor
 echo "🐍 Starting PDF Extractor (Python)... [Logs: python-extractor.log]"
-(cd python-extractor && python app.py) > python-extractor.log 2>&1 &
+(cd python-extractor && source venv/bin/activate && python3 app.py) > python-extractor.log 2>&1 &
 PYTHON_PID=$!
 
 # 4. Start Frontend

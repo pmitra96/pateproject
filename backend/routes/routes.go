@@ -32,6 +32,10 @@ func SetupRouter() *chi.Mux {
 		r.Post("/ingest/order", controllers.IngestOrder)
 	})
 
+	// LLM Routes (public for now, add auth as needed)
+	r.Post("/llm/story", controllers.GenerateStory)
+	r.Post("/llm/suggest-meal", controllers.SuggestMeal)
+
 	// User Routes (OAuth/UserContext protected)
 	r.Group(func(r chi.Router) {
 		r.Use(auth.OAuthMiddleware)
