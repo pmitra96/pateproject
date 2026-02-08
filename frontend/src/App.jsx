@@ -11,7 +11,10 @@ import {
   suggestMealPersonalized,
   fetchGoals,
   createGoal,
-  deleteGoal
+  deleteGoal,
+  logMeal,
+  fetchMealHistory,
+  deleteMealLog
 } from './api';
 
 function App() {
@@ -36,6 +39,9 @@ function App() {
   const [newGoalTitle, setNewGoalTitle] = useState('');
   const [newGoalDescription, setNewGoalDescription] = useState('');
   const [viewingNutritionItem, setViewingNutritionItem] = useState(null);
+  const [selectedMeal, setSelectedMeal] = useState(null);
+  const [isLoggingMeal, setIsLoggingMeal] = useState(false);
+  const [mealHistory, setMealHistory] = useState([]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -345,6 +351,7 @@ function App() {
       <div className="tabs">
         <div className={`tab ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')}>Inventory</div>
         <div className={`tab ${activeTab === 'goals' ? 'active' : ''}`} onClick={() => setActiveTab('goals')}>My Goals</div>
+        <div className={`tab ${activeTab === 'meals' ? 'active' : ''}`} onClick={() => { setActiveTab('meals'); fetchMealHistory().then(setMealHistory).catch(console.error); }}>🍽️ Meals</div>
         <div className={`tab ${activeTab === 'nutrition' ? 'active' : ''}`} onClick={() => setActiveTab('nutrition')}>🔥 Nutrition</div>
         <div className={`tab ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')}>Order History</div>
         <div className={`tab ${activeTab === 'upload' ? 'active' : ''}`} onClick={() => setActiveTab('upload')}>Upload Invoice</div>
@@ -403,15 +410,16 @@ function App() {
                             <div className="text-secondary mb-3" style={{ fontSize: '0.8rem', flex: 1 }}>
                               <strong>Benefits:</strong> {meal.benefits}
                             </div>
-                            <details style={{ fontSize: '0.85rem', cursor: 'pointer' }}>
-                              <summary style={{ color: 'var(--accent-color)', fontWeight: 500 }}>View Recipe</summary>
-                              <div style={{ padding: '0.5rem 0', borderTop: '1px solid var(--border-color)', marginTop: '0.5rem' }}>
-                                <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Ingredients:</div>
-                                <div className="text-secondary mb-2">{meal.ingredients.join(', ')}</div>
-                                <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Instructions:</div>
-                                <div className="text-secondary">{meal.instructions}</div>
-                              </div>
-                            </details>
+                            <button
+                              className="btn"
+                              style={{ width: '100%', marginTop: 'auto' }}
+                              onClick={() => {
+                                console.log('View Details clicked, meal:', meal);
+                                setSelectedMeal(meal);
+                              }}
+                            >
+                              View Details →
+                            </button>
                           </div>
                         ))}
                       </div>
@@ -623,6 +631,64 @@ function App() {
                   Try pairing it with complex carbs from your stock to maintain steady energy levels throughout the day!
                 </p>
               </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {activeTab === 'meals' && (
+        <section>
+          <h2 style={{ marginBottom: '1rem' }}>🍽️ Meal History</h2>
+          {!user ? (
+            <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>Please log in to view meal history.</div>
+          ) : mealHistory.length === 0 ? (
+            <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>
+              No meals logged yet. Log a meal from the suggested recipes!
+            </div>
+          ) : (
+            <div className="grid-cols-auto">
+              {mealHistory.map((meal) => (
+                <div key={meal.id} className="glass-panel p-4" style={{ position: 'relative' }}>
+                  <button
+                    className="icon-btn"
+                    style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', color: 'var(--danger)' }}
+                    onClick={async () => {
+                      if (confirm('Delete this meal and restore ingredients to pantry?')) {
+                        try {
+                          await deleteMealLog(meal.id);
+                          setMealHistory(mealHistory.filter(m => m.id !== meal.id));
+                          const data = await fetchPantry();
+                          setPantry(data);
+                          alert('Meal deleted and pantry restored!');
+                        } catch (err) {
+                          console.error('Failed to delete meal', err);
+                          alert('Failed to delete meal');
+                        }
+                      }
+                    }}
+                  >
+                    🗑️
+                  </button>
+                  <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem', paddingRight: '2rem' }}>{meal.name}</h3>
+                  <div className="text-secondary" style={{ fontSize: '0.75rem', marginBottom: '0.75rem' }}>
+                    {new Date(meal.logged_at).toLocaleString()}
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                    <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9' }}>🔥 {meal.calories?.toFixed(0) || 0} kcal</span>
+                    <span className="badge" style={{ background: '#dcfce7', color: '#15803d' }}>💪 {meal.protein?.toFixed(1) || 0}g protein</span>
+                    <span className="badge" style={{ background: '#fee2e2', color: '#dc2626' }}>🍞 {meal.carbs?.toFixed(1) || 0}g carbs</span>
+                    <span className="badge" style={{ background: '#fef3c7', color: '#d97706' }}>🧈 {meal.fat?.toFixed(1) || 0}g fat</span>
+                  </div>
+                  <details style={{ fontSize: '0.8rem' }}>
+                    <summary className="text-secondary" style={{ cursor: 'pointer' }}>View Ingredients</summary>
+                    <ul style={{ margin: '0.5rem 0 0 0', paddingLeft: '1.2rem' }}>
+                      {JSON.parse(meal.ingredients || '[]').map((ing, i) => (
+                        <li key={i} className="text-secondary">{ing}</li>
+                      ))}
+                    </ul>
+                  </details>
+                </div>
+              ))}
             </div>
           )}
         </section>
@@ -841,6 +907,70 @@ function App() {
             </div>
 
             <button className="btn btn-secondary w-full mt-6" onClick={() => setViewingNutritionItem(null)}>Close</button>
+          </div>
+        </div>
+      )}
+
+      {/* Meal Detail Modal */}
+      {selectedMeal && (
+        <div className="modal-overlay" onClick={() => setSelectedMeal(null)}>
+          <div className="modal glass-panel p-6" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+            <div className="flex-between mb-4">
+              <h2 style={{ margin: 0 }}>{selectedMeal.name}</h2>
+              <button className="icon-btn" onClick={() => setSelectedMeal(null)}>✕</button>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+              <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9' }}>🔥 {selectedMeal.calories} kcal</span>
+              <span className="badge" style={{ background: '#dcfce7', color: '#15803d' }}>💪 {selectedMeal.protein} protein</span>
+              <span className="badge">⏱️ {selectedMeal.prep_time}</span>
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-color)' }}>Benefits</div>
+              <div className="text-secondary">{selectedMeal.benefits}</div>
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-color)' }}>Ingredients</div>
+              <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+                {selectedMeal.ingredients.map((ing, i) => (
+                  <li key={i} className="text-secondary" style={{ marginBottom: '0.25rem' }}>{ing}</li>
+                ))}
+              </ul>
+            </div>
+
+            <div style={{ marginBottom: '1.5rem' }}>
+              <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-color)' }}>Instructions</div>
+              <div className="text-secondary">{selectedMeal.instructions}</div>
+            </div>
+
+            <button
+              className="btn w-full"
+              style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', padding: '1rem' }}
+              disabled={isLoggingMeal}
+              onClick={async () => {
+                setIsLoggingMeal(true);
+                try {
+                  const result = await logMeal(selectedMeal);
+                  alert(`✅ Meal logged! Updated: ${result.updated_items?.join(', ') || 'No pantry items matched'}`);
+                  setSelectedMeal(null);
+                  // Refresh pantry to show updated quantities
+                  const data = await fetchPantry();
+                  setPantry(data);
+                } catch (err) {
+                  console.error('Failed to log meal', err);
+                  alert('Failed to log meal: ' + err.message);
+                } finally {
+                  setIsLoggingMeal(false);
+                }
+              }}
+            >
+              {isLoggingMeal ? '⏳ Logging...' : '📋 Log This Meal'}
+            </button>
+            <div className="text-secondary" style={{ fontSize: '0.75rem', textAlign: 'center', marginTop: '0.5rem' }}>
+              This will reduce your pantry quantities based on the ingredients used.
+            </div>
           </div>
         </div>
       )}

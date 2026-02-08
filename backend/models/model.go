@@ -141,3 +141,20 @@ type Goal struct {
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
 }
+
+// MealLog represents a logged meal with nutrition totals.
+type MealLog struct {
+	ID          uint           `gorm:"primaryKey" json:"id"`
+	UserID      uint           `gorm:"not null;index" json:"user_id"`
+	Name        string         `gorm:"size:255;not null" json:"name"`
+	Calories    float64        `gorm:"default:0" json:"calories"`
+	Protein     float64        `gorm:"default:0" json:"protein"`
+	Carbs       float64        `gorm:"default:0" json:"carbs"`
+	Fat         float64        `gorm:"default:0" json:"fat"`
+	Fiber       float64        `gorm:"default:0" json:"fiber"`
+	Ingredients string         `gorm:"type:text" json:"ingredients"` // JSON array of ingredients with quantities
+	LoggedAt    time.Time      `json:"logged_at"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+}

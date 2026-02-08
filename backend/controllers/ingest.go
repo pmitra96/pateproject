@@ -196,9 +196,12 @@ func IngestOrder(w http.ResponseWriter, r *http.Request) {
 		for i, name := range missingNames {
 			ext := extractions[i]
 
+			// Normalize Ingredient Name
+			normalizedName := normalizeIngredientName(ext.Ingredient)
+
 			// Resolve Ingredient
 			var ingredient models.Ingredient
-			tx.Where("LOWER(name) = ?", strings.ToLower(ext.Ingredient)).FirstOrCreate(&ingredient, models.Ingredient{Name: ext.Ingredient})
+			tx.Where("LOWER(name) = ?", strings.ToLower(normalizedName)).FirstOrCreate(&ingredient, models.Ingredient{Name: normalizedName})
 
 			// Resolve Brand
 			var brandID *uint
@@ -298,23 +301,91 @@ func IngestOrder(w http.ResponseWriter, r *http.Request) {
 		// Update Aggregated state
 		pantryItem.DerivedQuantity += quantity
 		pantryItem.ItemID = item.ID // Update to the most recent specific item (brand/product)
+
 		if err := tx.Save(&pantryItem).Error; err != nil {
 			tx.Rollback()
-			http.Error(w, "Failed to update pantry state", http.StatusInternalServerError)
+			http.Error(w, "Failed to update pantry item", http.StatusInternalServerError)
 			return
 		}
 	}
 
 	tx.Commit()
-	logger.Info("Order ingested successfully", "order_id", order.ID, "items_count", len(req.Items))
 
-	// Enqueue nutrition jobs AFTER commit so items are visible to the worker
-	for _, name := range missingNames {
-		if item, ok := itemMap[name]; ok {
+	// Enqueue async nutrition job (runs in background)
+	// We need to do this AFTER commit so the workers can find the items
+	for _, id := range missingNames {
+		if item, ok := itemMap[id]; ok {
 			nutritionWorker.Enqueue(item.ID)
 		}
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte(`{"status": "created"}`))
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "success",
+		"order_id": order.ID,
+		"message":  "Order ingested successfully",
+	})
+}
+
+// normalizeIngredientName cleans up ingredient names (e.g., "Soya Tofu" -> "Tofu")
+func normalizeIngredientName(name string) string {
+	name = strings.TrimSpace(name)
+	lower := strings.ToLower(name)
+
+	// Direct mappings for common redundancies or typos
+	replacements := map[string]string{
+		"soya tofu": "Tofu",
+		"soy tofu":  "Tofu",
+		"broccoll":  "Broccoli", // Fix known typo
+		"brocoli":   "Broccoli",
+		"yoghurt":   "Yogurt",
+		"dahi":      "Yogurt",
+		"curd":      "Yogurt", // Standardize curd/yogurt
+	}
+
+	if val, ok := replacements[lower]; ok {
+		return val
+	}
+
+	// Remove common prefixes/suffixes if present
+	// e.g. "Fresh Tomato" -> "Tomato"
+	words := strings.Fields(name)
+	if len(words) > 1 {
+		// extensive list of modifiers to strip from start
+		modifiers := []string{
+			"fresh", "organic", "raw", "premium", "natural",
+			"farm", "whole", "sliced", "chopped", "diced",
+		}
+
+		cleanWords := []string{}
+		for _, w := range words {
+			isMod := false
+			wLower := strings.ToLower(w)
+			for _, m := range modifiers {
+				if wLower == m {
+					isMod = true
+					break
+				}
+			}
+			if !isMod {
+				cleanWords = append(cleanWords, w)
+			}
+		}
+
+		// If we stripped everything, revert to original
+		if len(cleanWords) == 0 {
+			return name
+		}
+
+		// If we reduced it to just 1 word, capitalize it
+		if len(cleanWords) == 1 {
+			return strings.Title(strings.ToLower(cleanWords[0]))
+		}
+
+		// Reassemble
+		return strings.Join(cleanWords, " ")
+	}
+
+	return strings.Title(lower)
 }

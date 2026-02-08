@@ -58,6 +58,11 @@ func SetupRouter() *chi.Mux {
 		r.Post("/goals", controllers.CreateGoal)
 		r.Delete("/goals/{goal_id}", controllers.DeleteGoal)
 
+		// Meals
+		r.Post("/meals/log", controllers.LogMeal)
+		r.Get("/meals", controllers.GetMealHistory)
+		r.Delete("/meals/{meal_id}", controllers.DeleteMealLog)
+
 		// LLM with auth (for personalized suggestions)
 		r.Post("/llm/suggest-meal-personalized", controllers.SuggestMealPersonalized)
 	})
