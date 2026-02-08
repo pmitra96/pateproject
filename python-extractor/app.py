@@ -90,6 +90,10 @@ def parse_unit_and_value(text: str) -> tuple[float, str]:
             return val * 1000, "ml"
         
         return val, unit
+
+    
+
+
     
     return 1, "pcs"
 
@@ -130,6 +134,9 @@ def detect_provider(pdf_path: str) -> str:
                 elif "blinkit" in text_lower or "grofers" in text_lower:
                     logger.info("Detected provider: blinkit")
                     return "blinkit"
+                elif "trolleypop" in text_lower or "first club" in text_lower:
+                    logger.info("Detected provider: first_club")
+                    return "first_club"
                 else:
                     return "swiggy"
     
@@ -218,6 +225,99 @@ def extract_from_zepto(pdf_path: str) -> ExtractionResult:
     
     logger.info(f"Zepto extraction completed. Found {len(items)} items")
     return ExtractionResult(provider="zepto", items=items)
+
+
+def extract_from_first_club(pdf_path: str) -> ExtractionResult:
+    """Extract items from First Club PDF invoice."""
+    logger.info("Starting First Club extraction")
+    items = []
+    
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            # Extract tables
+            tables = page.extract_tables()
+            
+            for table in tables:
+                if not table or len(table) < 2:
+                    continue
+                
+                # Find header row and column indices
+                header_idx = None
+                particulars_col_idx = None
+                
+                for i, row in enumerate(table):
+                    if not row:
+                        continue
+                    
+                    row_text = ' '.join(str(cell).lower() if cell else '' for cell in row)
+                    
+                    # Look for header with "Particulars"
+                    if 'particulars' in row_text:
+                        header_idx = i
+                        
+                        # Find column index for Particulars
+                        for j, cell in enumerate(row):
+                            if cell:
+                                cell_lower = str(cell).lower()
+                                if 'particulars' in cell_lower:
+                                    particulars_col_idx = j
+                        break
+                
+                if header_idx is None or particulars_col_idx is None:
+                    logger.warning("Could not find header row or Particulars column")
+                    continue
+                
+                # Skip the sub-header row (Rate/Amt. row) if it exists
+                start_row = header_idx + 1
+                if start_row < len(table) and table[start_row]:
+                    row_text = ' '.join(str(cell).lower() if cell else '' for cell in table[start_row])
+                    if 'rate' in row_text and 'amt' in row_text:
+                        start_row += 1
+                
+                # Extract items
+                for row in table[start_row:]:
+                    if not row or not any(row):
+                        continue
+                    
+                    # Skip total rows
+                    row_text = ' '.join(str(cell) if cell else '' for cell in row).lower()
+                    if 'total' in row_text or 'item total' in row_text or 'delivery charges' in row_text:
+                        break
+                    
+                    # Get particulars (item description)
+                    particulars = str(row[particulars_col_idx]) if particulars_col_idx < len(row) and row[particulars_col_idx] else None
+                    if not particulars or len(particulars.strip()) < 2:
+                        continue
+                    
+                    # Skip if it's just a number (Sr. No column content)
+                    if particulars.strip().isdigit():
+                        continue
+                    
+                    # Extract quantity from "x N" pattern
+                    qty = 1.0
+                    qty_match = re.search(r'\s+x\s+(\d+(?:\.\d+)?)\s*$', particulars, re.IGNORECASE)
+                    if qty_match:
+                        qty = float(qty_match.group(1))
+                        # Remove the "x N" part from the description
+                        particulars = re.sub(r'\s+x\s+\d+(?:\.\d+)?\s*$', '', particulars, flags=re.IGNORECASE)
+                    
+                    # Parse unit info from description (e.g., "(200g)")
+                    unit_value, unit = parse_unit_and_value(particulars)
+                    
+                    # Clean name
+                    clean_name = clean_item_name(particulars, unit_value, unit)
+                    
+                    if clean_name and len(clean_name.strip()) > 1:
+                        items.append(ExtractedItem(
+                            name=clean_name,
+                            count=qty,
+                            unit_value=unit_value,
+                            unit=unit
+                        ))
+                        logger.debug(f"Extracted item: {clean_name} (qty: {qty}, unit: {unit_value}{unit})")
+    
+    logger.info(f"First Club extraction completed. Found {len(items)} items")
+    return ExtractionResult(provider="first_club", items=items)
 
 
 def extract_from_blinkit(pdf_path: str) -> ExtractionResult:
@@ -406,6 +506,7 @@ def get_extraction_function(provider: str):
         "zepto": extract_from_zepto,
         "blinkit": extract_from_blinkit,
         "swiggy": extract_from_swiggy,
+        "first_club": extract_from_first_club,
     }
     
     extraction_func = extraction_strategies.get(provider)
