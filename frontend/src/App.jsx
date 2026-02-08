@@ -14,7 +14,8 @@ import {
   deleteGoal,
   logMeal,
   fetchMealHistory,
-  deleteMealLog
+  deleteMealLog,
+  sendChatMessage
 } from './api';
 
 function App() {
@@ -42,6 +43,12 @@ function App() {
   const [selectedMeal, setSelectedMeal] = useState(null);
   const [isLoggingMeal, setIsLoggingMeal] = useState(false);
   const [mealHistory, setMealHistory] = useState([]);
+  
+  // Chatbot state
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatLoading, setIsChatLoading] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -317,6 +324,35 @@ function App() {
     } catch (err) {
       console.error('Failed to delete goal', err);
       alert('Failed to delete goal');
+    }
+  };
+
+  const handleSendChat = async () => {
+    if (!chatInput.trim() || isChatLoading) return;
+    
+    const userMessage = chatInput.trim();
+    setChatInput('');
+    setChatMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+    setIsChatLoading(true);
+    
+    try {
+      const inventory = pantry.map(item => ({
+        name: item.item.ingredient?.name || item.item.name,
+        quantity: item.effective_quantity,
+        unit: item.item.unit
+      }));
+      const goalsForLLM = goals.map(g => ({
+        title: g.title,
+        description: g.description || ''
+      }));
+      
+      const result = await sendChatMessage(userMessage, chatMessages, inventory, goalsForLLM);
+      setChatMessages(prev => [...prev, { role: 'assistant', content: result.response }]);
+    } catch (err) {
+      console.error('Chat error', err);
+      setChatMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, I encountered an error. Please try again.' }]);
+    } finally {
+      setIsChatLoading(false);
     }
   };
 
@@ -1026,6 +1062,153 @@ function App() {
           </div>
         )
       }
+
+      {/* Floating Chatbot */}
+      {user && (
+        <>
+          {/* Chat Toggle Button */}
+          <button
+            onClick={() => setChatOpen(!chatOpen)}
+            style={{
+              position: 'fixed',
+              bottom: '24px',
+              right: '24px',
+              width: '60px',
+              height: '60px',
+              borderRadius: '50%',
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              border: 'none',
+              boxShadow: '0 4px 15px rgba(102, 126, 234, 0.4)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '1.5rem',
+              color: 'white',
+              zIndex: 1000,
+              transition: 'transform 0.2s'
+            }}
+            onMouseOver={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
+            onMouseOut={(e) => e.currentTarget.style.transform = 'scale(1)'}
+          >
+            {chatOpen ? '✕' : '💬'}
+          </button>
+
+          {/* Chat Window */}
+          {chatOpen && (
+            <div style={{
+              position: 'fixed',
+              bottom: '100px',
+              right: '24px',
+              width: '380px',
+              height: '500px',
+              background: 'white',
+              borderRadius: '16px',
+              boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
+              display: 'flex',
+              flexDirection: 'column',
+              zIndex: 999,
+              overflow: 'hidden'
+            }}>
+              {/* Chat Header */}
+              <div style={{
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                color: 'white',
+                padding: '1rem',
+                fontWeight: 600
+              }}>
+                🤖 Kitchen Assistant
+                <div style={{ fontSize: '0.75rem', opacity: 0.9, fontWeight: 400 }}>Ask about your pantry, meals & nutrition</div>
+              </div>
+
+              {/* Messages */}
+              <div style={{
+                flex: 1,
+                overflowY: 'auto',
+                padding: '1rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.75rem'
+              }}>
+                {chatMessages.length === 0 && (
+                  <div style={{ color: 'var(--text-secondary)', textAlign: 'center', marginTop: '2rem' }}>
+                    <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>👋</div>
+                    <div>Hi! Ask me anything about your pantry or meals.</div>
+                    <div style={{ fontSize: '0.8rem', marginTop: '1rem', color: '#999' }}>
+                      Try: "What can I make for dinner?" or "What's running low?"
+                    </div>
+                  </div>
+                )}
+                {chatMessages.map((msg, idx) => (
+                  <div key={idx} style={{
+                    alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                    maxWidth: '80%',
+                    padding: '0.75rem 1rem',
+                    borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                    background: msg.role === 'user' ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' : '#f1f3f4',
+                    color: msg.role === 'user' ? 'white' : '#333',
+                    fontSize: '0.9rem',
+                    lineHeight: 1.4,
+                    whiteSpace: 'pre-wrap'
+                  }}>
+                    {msg.content}
+                  </div>
+                ))}
+                {isChatLoading && (
+                  <div style={{
+                    alignSelf: 'flex-start',
+                    padding: '0.75rem 1rem',
+                    borderRadius: '16px 16px 16px 4px',
+                    background: '#f1f3f4',
+                    color: '#666'
+                  }}>
+                    ⏳ Thinking...
+                  </div>
+                )}
+              </div>
+
+              {/* Input */}
+              <div style={{
+                padding: '1rem',
+                borderTop: '1px solid #eee',
+                display: 'flex',
+                gap: '0.5rem'
+              }}>
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && handleSendChat()}
+                  placeholder="Type a message..."
+                  style={{
+                    flex: 1,
+                    padding: '0.75rem 1rem',
+                    borderRadius: '24px',
+                    border: '1px solid #ddd',
+                    outline: 'none',
+                    fontSize: '0.9rem'
+                  }}
+                />
+                <button
+                  onClick={handleSendChat}
+                  disabled={isChatLoading || !chatInput.trim()}
+                  style={{
+                    padding: '0.75rem 1rem',
+                    borderRadius: '24px',
+                    background: chatInput.trim() ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' : '#ddd',
+                    color: 'white',
+                    border: 'none',
+                    cursor: chatInput.trim() ? 'pointer' : 'not-allowed',
+                    fontWeight: 600
+                  }}
+                >
+                  Send
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div >
   );
 }

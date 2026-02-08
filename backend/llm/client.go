@@ -459,3 +459,65 @@ Make dishes more authentic with proper names, realistic cooking times, and accur
 
 	return refinedResponse, nil
 }
+
+// ChatMessage represents a conversation message
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// ChatWithContext handles chatbot conversations with inventory and goals context
+func (c *Client) ChatWithContext(userMessage string, history []ChatMessage, inventory []InventoryItem, goals []GoalInfo) (string, error) {
+	// Build inventory context
+	var inventoryText string
+	if len(inventory) > 0 {
+		inventoryText = "User's pantry inventory:\n"
+		for _, item := range inventory {
+			inventoryText += fmt.Sprintf("- %s: %.0f %s\n", item.Name, item.Quantity, item.Unit)
+		}
+	} else {
+		inventoryText = "User's pantry is empty."
+	}
+
+	// Build goals context
+	var goalsText string
+	if len(goals) > 0 {
+		goalsText = "\nUser's health goals:\n"
+		for _, goal := range goals {
+			goalsText += fmt.Sprintf("- %s", goal.Title)
+			if goal.Description != "" {
+				goalsText += fmt.Sprintf(": %s", goal.Description)
+			}
+			goalsText += "\n"
+		}
+	} else {
+		goalsText = "\nNo specific health goals set."
+	}
+
+	systemPrompt := fmt.Sprintf(`You are a helpful kitchen assistant for a pantry management app. You help users with:
+- Questions about their inventory (what they have, what's low, expiring soon)
+- Meal suggestions based on available ingredients
+- Nutrition advice aligned with their goals
+- Cooking tips and recipes
+
+%s
+%s
+
+Be concise, friendly, and helpful. If asked about items not in the inventory, mention that.
+For meal suggestions, use only ingredients from the inventory.`, inventoryText, goalsText)
+
+	// Build messages array
+	messages := []Message{
+		{Role: "system", Content: systemPrompt},
+	}
+
+	// Add conversation history
+	for _, msg := range history {
+		messages = append(messages, Message{Role: msg.Role, Content: msg.Content})
+	}
+
+	// Add current user message
+	messages = append(messages, Message{Role: "user", Content: userMessage})
+
+	return c.Chat(messages)
+}

@@ -181,3 +181,16 @@ export const deleteMealLog = async (mealId) => {
   if (!res.ok) throw new Error('Failed to delete meal');
   return res.json();
 };
+
+export const sendChatMessage = async (message, history, inventory, goals) => {
+  const res = await fetch(`${API_BASE}/llm/chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({ message, history, inventory, goals })
+  });
+  if (!res.ok) throw new Error('Failed to get chat response');
+  return res.json();
+};

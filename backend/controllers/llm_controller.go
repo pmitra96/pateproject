@@ -136,3 +136,51 @@ func SuggestMealPersonalized(w http.ResponseWriter, r *http.Request) {
 		Suggestions: suggestions,
 	})
 }
+
+type ChatRequest struct {
+	Message   string            `json:"message"`
+	History   []llm.ChatMessage `json:"history"`
+	Inventory []llm.InventoryItem `json:"inventory"`
+	Goals     []llm.GoalInfo      `json:"goals"`
+}
+
+type ChatResponse struct {
+	Response string `json:"response"`
+}
+
+func ChatBot(w http.ResponseWriter, r *http.Request) {
+	logger.Info("Received chatbot request")
+
+	var req ChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid request body"})
+		return
+	}
+
+	if req.Message == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Message is required"})
+		return
+	}
+
+	client := llm.NewClient()
+	response, err := client.ChatWithContext(req.Message, req.History, req.Inventory, req.Goals)
+
+	if err != nil {
+		logger.Error("Failed to get chatbot response", "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	logger.Info("Chatbot response generated", "message_length", len(req.Message))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(ChatResponse{
+		Response: response,
+	})
+}
