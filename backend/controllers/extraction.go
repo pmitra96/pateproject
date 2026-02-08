@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/pmitra96/pateproject/config"
 	"github.com/pmitra96/pateproject/extractor"
@@ -23,7 +24,7 @@ func ExtractItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, _, err := r.FormFile("invoice")
+	file, fh, err := r.FormFile("invoice")
 	if err != nil {
 		http.Error(w, "Error retrieving file", http.StatusBadRequest)
 		return
@@ -31,8 +32,9 @@ func ExtractItems(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	// Save temp file (needed by both extractors)
+	ext := filepath.Ext(fh.Filename)
 	tempDir := os.TempDir()
-	tempFile, err := os.CreateTemp(tempDir, "upload-*.pdf")
+	tempFile, err := os.CreateTemp(tempDir, "upload-*"+ext)
 	if err != nil {
 		http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
 		return
@@ -48,7 +50,7 @@ func ExtractItems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pythonURL := config.GetEnv("PYTHON_EXTRACTOR_URL", "http://localhost:8081")
-	result, err := callPythonExtractor(pythonURL, tempFile.Name())
+	result, err := callPythonExtractor(pythonURL, tempFile.Name(), fh.Filename)
 
 	if err != nil {
 		http.Error(w, "Failed to extract data: "+err.Error(), http.StatusInternalServerError)
@@ -64,9 +66,9 @@ func ExtractItems(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
-func callPythonExtractor(baseURL string, pdfPath string) (*extractor.ExtractionResult, error) {
-	// Open the PDF file
-	file, err := os.Open(pdfPath)
+func callPythonExtractor(baseURL string, filePath string, originalFilename string) (*extractor.ExtractionResult, error) {
+	// Open the file
+	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +78,7 @@ func callPythonExtractor(baseURL string, pdfPath string) (*extractor.ExtractionR
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 
-	part, err := writer.CreateFormFile("file", "invoice.pdf")
+	part, err := writer.CreateFormFile("file", originalFilename)
 	if err != nil {
 		return nil, err
 	}

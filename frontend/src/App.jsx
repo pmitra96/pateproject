@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { GoogleLogin } from '@react-oauth/google';
 import { jwtDecode } from 'jwt-decode';
-import { fetchPantry, updatePantryItem, deletePantryItem, extractItems, ingestOrder, suggestMealPersonalized, fetchGoals, createGoal, deleteGoal } from './api';
+import { fetchPantry, updatePantryItem, deletePantryItem, bulkDeletePantryItems, extractItems, ingestOrder } from './api';
 
 function App() {
   const [pantry, setPantry] = useState([]);
@@ -13,6 +13,8 @@ function App() {
   const [editingId, setEditingId] = useState(null);
   const [editValue, setEditValue] = useState('');
   const [deletingItem, setDeletingItem] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [user, setUser] = useState(null);
   const [extractionResult, setExtractionResult] = useState(null);
   const [isExtracting, setIsExtracting] = useState(false);
@@ -57,6 +59,7 @@ function App() {
 
   const loadData = async () => {
     setLoading(true);
+    setSelectedIds(new Set());
     try {
       if (activeTab === 'inventory') {
         const data = await fetchPantry();
@@ -107,12 +110,43 @@ function App() {
     if (!deletingItem) return;
     try {
       await deletePantryItem(deletingItem.item_id);
-      const data = await fetchPantry();
-      setPantry(data);
+      loadData();
       setDeletingItem(null);
     } catch (err) {
       console.error("Failed to delete", err);
       alert("Failed to delete item");
+    }
+  };
+
+  const handleSelectItem = (id) => {
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedIds(next);
+  };
+
+  const handleSelectAll = (e) => {
+    if (e.target.checked) {
+      setSelectedIds(new Set(filteredPantry.map(i => i.item_id)));
+    } else {
+      setSelectedIds(new Set());
+    }
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedIds.size > 0) {
+      setShowBulkDeleteConfirm(true);
+    }
+  };
+
+  const handleConfirmBulkDelete = async () => {
+    try {
+      await bulkDeletePantryItems(Array.from(selectedIds));
+      loadData();
+      setShowBulkDeleteConfirm(false);
+    } catch (err) {
+      console.error("Failed to bulk delete", err);
+      alert("Failed to delete selected items");
     }
   };
 
@@ -147,6 +181,7 @@ function App() {
 
       await ingestOrder(orderData);
       setExtractionResult(null);
+      loadData();
       setActiveTab('inventory');
     } catch (err) {
       console.error("Ingestion failed", err);
@@ -268,8 +303,8 @@ function App() {
               />
             </div>
             {user && pantry.length > 0 && (
-              <button 
-                className="btn" 
+              <button
+                className="btn"
                 onClick={handleSuggestMeal}
                 disabled={isLoadingSuggestions}
                 style={{ whiteSpace: 'nowrap' }}
@@ -286,36 +321,59 @@ function App() {
           ) : filteredPantry.length === 0 ? (
             <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>No items found.</div>
           ) : (
-            <div className="glass-panel p-6">
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ borderBottom: '2px solid var(--border-color)', textAlign: 'left' }}>
-                    <th style={{ padding: '0.75rem 0', fontWeight: 600 }}>Item</th>
-                    <th style={{ padding: '0.75rem 0', fontWeight: 600 }}>Stock</th>
-                    <th style={{ padding: '0.75rem 0', fontWeight: 600 }}>Unit</th>
-                    <th style={{ padding: '0.75rem 0', fontWeight: 600, textAlign: 'right' }}>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPantry.map(item => {
-                    const isLow = item.effective_quantity < 2;
-                    return (
-                      <tr key={item.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                        <td style={{ padding: '0.75rem 0' }}>{item.item.name}</td>
-                        <td style={{ padding: '0.75rem 0', fontWeight: 600, color: isLow ? 'var(--danger)' : 'inherit' }}>
-                          {item.effective_quantity}
-                        </td>
-                        <td style={{ padding: '0.75rem 0' }}><span className="badge">{item.item.unit}</span></td>
-                        <td style={{ padding: '0.75rem 0', textAlign: 'right' }}>
-                          <button className="icon-btn" onClick={() => handleEdit(item)}>Update</button>
-                          <button className="icon-btn" style={{ marginLeft: '0.5rem', color: 'var(--danger)' }} onClick={() => handleDelete(item)}>Delete</button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <>
+              {selectedIds.size > 0 && (
+                <div className="glass-panel p-4 mb-4 flex-between" style={{ background: 'var(--danger-light)', borderColor: 'var(--danger)', borderLeftWidth: '4px' }}>
+                  <span style={{ fontWeight: 600 }}>{selectedIds.size} items selected</span>
+                  <button className="btn" style={{ background: 'var(--danger)' }} onClick={handleBulkDelete}>Delete Selected</button>
+                </div>
+              )}
+              <div className="glass-panel p-6">
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid var(--border-color)', textAlign: 'left' }}>
+                      <th style={{ padding: '0.75rem 0', width: '40px' }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.size === filteredPantry.length && filteredPantry.length > 0}
+                          onChange={handleSelectAll}
+                        />
+                      </th>
+                      <th style={{ padding: '0.75rem 0', fontWeight: 600 }}>Item</th>
+                      <th style={{ padding: '0.75rem 0', fontWeight: 600 }}>Stock</th>
+                      <th style={{ padding: '0.75rem 0', fontWeight: 600 }}>Unit</th>
+                      <th style={{ padding: '0.75rem 0', fontWeight: 600, textAlign: 'right' }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredPantry.map(item => {
+                      const isLow = item.effective_quantity < 2;
+                      const isSelected = selectedIds.has(item.item_id);
+                      return (
+                        <tr key={item.id} style={{ borderBottom: '1px solid var(--border-color)', background: isSelected ? 'rgba(0,0,0,0.02)' : 'transparent' }}>
+                          <td style={{ padding: '0.75rem 0' }}>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => handleSelectItem(item.item_id)}
+                            />
+                          </td>
+                          <td style={{ padding: '0.75rem 0' }}>{item.item.name}</td>
+                          <td style={{ padding: '0.75rem 0', fontWeight: 600, color: isLow ? 'var(--danger)' : 'inherit' }}>
+                            {item.effective_quantity}
+                          </td>
+                          <td style={{ padding: '0.75rem 0' }}><span className="badge">{item.item.unit}</span></td>
+                          <td style={{ padding: '0.75rem 0', textAlign: 'right' }}>
+                            <button className="icon-btn" onClick={() => handleEdit(item)}>Update</button>
+                            <button className="icon-btn" style={{ marginLeft: '0.5rem', color: 'var(--danger)' }} onClick={() => handleDelete(item)}>Delete</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </section>
       )}
@@ -343,7 +401,7 @@ function App() {
                           <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>{goal.title}</div>
                           {goal.description && <div className="text-secondary" style={{ fontSize: '0.875rem' }}>{goal.description}</div>}
                         </div>
-                        <button 
+                        <button
                           onClick={() => handleDeleteGoal(goal.id)}
                           style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: '1.2rem' }}
                         >×</button>
@@ -364,7 +422,7 @@ function App() {
                     { title: 'Reduce sugar intake', desc: 'Cut down on processed sugars' },
                     { title: 'Heart-healthy eating', desc: 'Low sodium, good fats' },
                   ].map((preset, i) => (
-                    <button 
+                    <button
                       key={i}
                       className="btn btn-secondary"
                       style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
@@ -504,98 +562,14 @@ function App() {
         </div>
       )}
 
-      {showAddGoal && (
+      {showBulkDeleteConfirm && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div className="glass-panel p-6" style={{ width: '400px' }}>
-            <h2 className="mb-4">🎯 Add New Goal</h2>
-            <input
-              type="text"
-              placeholder="Goal title (e.g., Lose 5kg in 30 days)"
-              className="mb-4"
-              style={{ width: '100%', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: '8px' }}
-              value={newGoalTitle}
-              onChange={e => setNewGoalTitle(e.target.value)}
-              autoFocus
-            />
-            <textarea
-              placeholder="Description (optional)"
-              className="mb-4"
-              style={{ width: '100%', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: '8px', minHeight: '80px', resize: 'vertical' }}
-              value={newGoalDescription}
-              onChange={e => setNewGoalDescription(e.target.value)}
-            />
+          <div className="glass-panel p-6" style={{ width: '320px' }}>
+            <h2 className="mb-4">Delete Multiple Items</h2>
+            <p className="text-secondary mb-6">Are you sure you want to delete <strong>{selectedIds.size}</strong> selected items from your pantry?</p>
             <div className="flex-between">
-              <button className="btn btn-secondary" onClick={() => { setShowAddGoal(false); setNewGoalTitle(''); setNewGoalDescription(''); }}>Cancel</button>
-              <button className="btn" onClick={handleAddGoal}>Add Goal</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {mealSuggestions && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div className="glass-panel p-6" style={{ width: '90%', maxWidth: '900px', maxHeight: '85vh', overflow: 'auto' }}>
-            <div className="flex-between mb-4">
-              <h2 style={{ margin: 0 }}>✨ Meal Suggestions</h2>
-              <button 
-                onClick={() => setMealSuggestions(null)} 
-                style={{ background: 'transparent', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-secondary)' }}
-              >
-                ×
-              </button>
-            </div>
-            {(() => {
-              try {
-                const data = typeof mealSuggestions === 'string' ? JSON.parse(mealSuggestions) : mealSuggestions;
-                return (
-                  <>
-                    <div style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', padding: '1rem', borderRadius: '8px', marginBottom: '1rem' }}>
-                      <div style={{ fontSize: '0.85rem', opacity: 0.9 }}>🎯 Your Goal</div>
-                      <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{data.goal}</div>
-                      <div style={{ fontSize: '0.85rem', marginTop: '0.25rem', opacity: 0.9 }}>Suggested {data.meal_type} options</div>
-                    </div>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
-                      <thead>
-                        <tr style={{ background: 'var(--bg-secondary)', textAlign: 'left' }}>
-                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '15%' }}>Dish</th>
-                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '18%' }}>Ingredients</th>
-                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '30%' }}>How to Make</th>
-                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '8%' }}>Time</th>
-                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '8%' }}>Calories</th>
-                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '8%' }}>Protein</th>
-                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '13%' }}>Benefits</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {data.meals?.map((meal, idx) => (
-                          <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                            <td style={{ padding: '0.75rem', fontWeight: 600, verticalAlign: 'top' }}>{meal.name}</td>
-                            <td style={{ padding: '0.75rem', verticalAlign: 'top' }}>
-                              {Array.isArray(meal.ingredients) ? meal.ingredients.join(', ') : meal.ingredients}
-                            </td>
-                            <td style={{ padding: '0.75rem', verticalAlign: 'top', fontSize: '0.8rem' }}>{meal.instructions}</td>
-                            <td style={{ padding: '0.75rem', verticalAlign: 'top', textAlign: 'center' }}>
-                              <span className="badge">{meal.prep_time}</span>
-                            </td>
-                            <td style={{ padding: '0.75rem', verticalAlign: 'top', textAlign: 'center', fontWeight: 600, color: '#e67e22' }}>{meal.calories}</td>
-                            <td style={{ padding: '0.75rem', verticalAlign: 'top', textAlign: 'center', fontWeight: 600, color: '#27ae60' }}>{meal.protein}</td>
-                            <td style={{ padding: '0.75rem', verticalAlign: 'top', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{meal.benefits}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </>
-                );
-              } catch (e) {
-                return (
-                  <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
-                    {mealSuggestions}
-                  </div>
-                );
-              }
-            })()}
-            <div style={{ marginTop: '1.5rem', textAlign: 'right' }}>
-              <button className="btn" onClick={() => setMealSuggestions(null)}>Close</button>
+              <button className="btn btn-secondary" onClick={() => setShowBulkDeleteConfirm(false)}>Cancel</button>
+              <button className="btn" style={{ background: 'var(--danger)' }} onClick={handleConfirmBulkDelete}>Delete All</button>
             </div>
           </div>
         </div>

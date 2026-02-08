@@ -16,6 +16,7 @@ import pdfplumber
 from pydantic import BaseModel
 import tempfile
 import os
+from image_extractor import extract_items
 
 # Configure logging
 LOG_FILE = Path(__file__).parent.parent / "python-extractor.log"
@@ -524,21 +525,28 @@ def get_extraction_function(provider: str):
 
 
 @app.post("/extract", response_model=ExtractionResult)
-async def extract_pdf(file: UploadFile = File(...)):
+async def extract_receipt(file: UploadFile = File(...)):
     """
-    Extract items from a PDF receipt.
+    Extract items from a PDF or Image receipt.
     
-    Accepts a PDF file and returns structured item data.
-    Automatically detects the provider and uses the appropriate extraction strategy.
+    Accepts PDF or Image files and returns structured item data.
+    Automatically detects the format and uses the appropriate extraction strategy.
     """
-    logger.info(f"Received PDF extraction request for file: {file.filename}")
+    filename = file.filename.lower()
+    logger.info(f"Received extraction request for file: {filename}")
     
-    if not file.filename.endswith('.pdf'):
-        logger.warning(f"Rejected non-PDF file: {file.filename}")
-        raise HTTPException(status_code=400, detail="File must be a PDF")
+    is_pdf = filename.endswith('.pdf') or file.content_type == 'application/pdf'
+    is_image = any(filename.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.webp']) or \
+               (file.content_type and file.content_type.startswith('image/'))
+    
+    if not is_pdf and not is_image:
+        logger.warning(f"Rejected unsupported file type: {filename} (MIME: {file.content_type})")
+        raise HTTPException(status_code=400, detail="File must be a PDF or an Image (JPG, PNG, WEBP)")
+    
+    suffix = '.pdf' if is_pdf else os.path.splitext(filename)[1]
     
     # Save to temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
@@ -546,17 +554,36 @@ async def extract_pdf(file: UploadFile = File(...)):
     logger.info(f"Saved uploaded file to temporary location: {tmp_path}")
     
     try:
-        # Step 1: Detect provider from PDF
-        provider = detect_provider(tmp_path)
-        
-        # Step 2: Get the appropriate extraction function using strategy pattern
-        extraction_func = get_extraction_function(provider)
-        
-        # Step 3: Call the extraction function
-        result = extraction_func(tmp_path)
-        
-        logger.info(f"Successfully extracted {len(result.items)} items from {file.filename}")
-        return result
+        if is_pdf:
+            # Step 1: Detect provider from PDF
+            provider = detect_provider(tmp_path)
+            
+            # Step 2: Get the appropriate extraction function using strategy pattern
+            extraction_func = get_extraction_function(provider)
+            
+            # Step 3: Call the extraction function
+            result = extraction_func(tmp_path)
+            
+            logger.info(f"Successfully extracted {len(result.items)} items from PDF: {filename}")
+            return result
+        else:
+            # Image extraction path
+            logger.info(f"Processing image extraction for: {filename}")
+            items_raw = extract_items(tmp_path)
+            
+            # Convert raw dicts to ExtractedItem models
+            items = [
+                ExtractedItem(
+                    name=item["name"],
+                    count=item["count"],
+                    unit_value=item["unit_value"],
+                    unit=item["unit"]
+                ) for item in items_raw
+            ]
+            
+            logger.info(f"Successfully extracted {len(items)} items from image: {filename}")
+            return ExtractionResult(provider="image_ocr", items=items)
+            
     except HTTPException as he:
         # Re-raise HTTP exceptions (like unsupported provider)
         logger.error(f"HTTP error during extraction: {he.detail}")
@@ -582,3 +609,4 @@ if __name__ == "__main__":
     import uvicorn
     logger.info("Starting PDF Extraction Service on port 8081...")
     uvicorn.run(app, host="0.0.0.0", port=8081)
+

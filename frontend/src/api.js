@@ -35,6 +35,18 @@ export const deletePantryItem = async (itemID) => {
   if (!res.ok) throw new Error('Failed to delete item');
 };
 
+export const bulkDeletePantryItems = async (itemIDs) => {
+  const res = await fetch(`${API_BASE}/pantry/bulk-delete`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({ item_ids: itemIDs })
+  });
+  if (!res.ok) throw new Error('Failed to bulk delete items');
+};
+
 export const fetchLowStock = async () => {
   const res = await fetch(`${API_BASE}/pantry/low-stock`, {
     headers: getAuthHeader()

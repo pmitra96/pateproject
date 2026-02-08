@@ -202,3 +202,29 @@ func DeletePantryItem(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func BulkDeletePantryItems(w http.ResponseWriter, r *http.Request) {
+	userID, _ := getUserID(r)
+
+	var req struct {
+		ItemIDs []uint `json:"item_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.ItemIDs) == 0 {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	logger.Info("Bulk deleting pantry items", "user_id", userID, "count", len(req.ItemIDs))
+
+	if err := database.DB.Where("user_id = ? AND item_id IN ?", userID, req.ItemIDs).Delete(&models.PantryItem{}).Error; err != nil {
+		http.Error(w, "Failed to delete items", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}

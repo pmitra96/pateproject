@@ -42,6 +42,7 @@ func SetupRouter() *chi.Mux {
 		r.Get("/pantry", controllers.GetPantry)
 		r.Patch("/pantry/{item_id}", controllers.UpdatePantryItem)
 		r.Delete("/pantry/{item_id}", controllers.DeletePantryItem)
+		r.Post("/pantry/bulk-delete", controllers.BulkDeletePantryItems)
 		r.Get("/pantry/low-stock", controllers.GetLowStock)
 		r.Get("/items", controllers.GetItems)
 		r.Post("/items", controllers.CreateItem)

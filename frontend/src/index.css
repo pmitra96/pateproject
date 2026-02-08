@@ -6,6 +6,7 @@
   --accent-color: #0f172a;
   --accent-hover: #334155;
   --danger: #ef4444;
+  --danger-light: #fef2f2;
   --success: #22c55e;
   --border-color: #e2e8f0;
   --font-main: 'Inter', system-ui, sans-serif;
@@ -145,6 +146,21 @@ h2 {
 .btn-secondary {
   background-color: #f1f5f9;
   color: var(--text-primary);
+}
+
+.icon-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--accent-color);
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.icon-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
 }
 
 /* Utils */
