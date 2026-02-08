@@ -372,8 +372,8 @@ IMPORTANT: Return ONLY valid JSON in this exact format, no other text:
       "ingredients": ["100g ingredient 1", "2 units ingredient 2"],
       "instructions": "Step by step cooking instructions",
       "prep_time": "10 mins",
-      "calories": "200-250",
-      "protein": "15g",
+      "calories": 250,
+      "protein": 15,
       "benefits": "How this helps achieve the goal"
     }
   ]
@@ -451,8 +451,8 @@ Fix ALL issues mentioned. Return the improved suggestions in the SAME JSON forma
       "ingredients": ["100g ingredient 1", "2 units ingredient 2"],
       "instructions": "Detailed step by step cooking instructions",
       "prep_time": "15 mins",
-      "calories": "200-250",
-      "protein": "15g",
+      "calories": 250,
+      "protein": 15,
       "benefits": "How this helps achieve the goal"
     }
   ]
