@@ -62,7 +62,7 @@ func GetPantry(w http.ResponseWriter, r *http.Request) {
 	userID, _ := getUserID(r)
 
 	var pantryItems []models.PantryItem
-	if err := database.DB.Preload("Item").Where("user_id = ?", userID).Find(&pantryItems).Error; err != nil {
+	if err := database.DB.Preload("Ingredient").Preload("Item.Brand").Where("user_id = ?", userID).Find(&pantryItems).Error; err != nil {
 		http.Error(w, "Failed to fetch pantry", http.StatusInternalServerError)
 		return
 	}
@@ -109,12 +109,9 @@ func UpdatePantryItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var pantryItem models.PantryItem
-	// We look up by UserID and ItemID (if the URL param is ItemID)
-	// OR by PantryItem.ID if the URL param is PantryItem ID.
-	// Let's assume it's ItemID from the canonical Item list purely because the route is /pantry/{item_id}
-	// and we want to update THAT item in the pantry.
-
-	if err := database.DB.Where("user_id = ? AND item_id = ?", userID, itemID).First(&pantryItem).Error; err != nil {
+	// We first try to find by ItemID (as the frontend sends it)
+	// But since ItemID can change (representative item updates), we also allow ID.
+	if err := database.DB.Where("user_id = ? AND (item_id = ? OR id = ?)", userID, itemID, itemID).First(&pantryItem).Error; err != nil {
 		http.Error(w, "Item not found in pantry", http.StatusNotFound)
 		return
 	}
@@ -153,7 +150,7 @@ func CreateItem(w http.ResponseWriter, r *http.Request) {
 func GetOrders(w http.ResponseWriter, r *http.Request) {
 	userID, _ := getUserID(r)
 	var orders []models.Order
-	database.DB.Preload("OrderItems.Item").Where("user_id = ?", userID).Find(&orders)
+	database.DB.Preload("OrderItems.Item.Ingredient").Preload("OrderItems.Item.Brand").Where("user_id = ?", userID).Find(&orders)
 	json.NewEncoder(w).Encode(orders)
 }
 
