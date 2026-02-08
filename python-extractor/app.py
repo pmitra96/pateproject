@@ -6,7 +6,10 @@ using pdfplumber. Supports multiple providers (Zepto, Blinkit, etc.).
 """
 
 import re
+import logging
+import sys
 from typing import List, Optional
+from pathlib import Path
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 import pdfplumber
@@ -14,9 +17,24 @@ from pydantic import BaseModel
 import tempfile
 import os
 
+# Configure logging
+LOG_FILE = Path(__file__).parent.parent / "python-extractor.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler(sys.stdout)  # Also log to console
+    ]
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="PDF Extraction Service", version="1.0.0")
 
+# Log startup
+logger.info("PDF Extraction Service starting up...")
+
+BLINKIT_EXCLUDED_ITEMS = ['handling charge', 'total']
 
 class ExtractedItem(BaseModel):
     name: str
@@ -84,6 +102,11 @@ def clean_item_name(name: str, unit_value: float, unit: str) -> str:
     # Remove standalone units
     name = re.sub(r'\d+\.?\d*\s*(g|kg|ml|l|pc|pcs)', '', name, flags=re.IGNORECASE)
     
+    name = re.sub(r'\d+\.?\d*\s*()', '', name, flags=re.IGNORECASE)
+
+    # Remove pack pouch jar
+    name = re.sub(r"\s*(?:\([^)]*\)\s*)+$", "", name, flags=re.IGNORECASE).strip()
+
     # Remove extra whitespace and newlines
     name = re.sub(r'\s+', ' ', name)
     name = name.strip()
@@ -91,31 +114,36 @@ def clean_item_name(name: str, unit_value: float, unit: str) -> str:
     return name
 
 
-def detect_provider(text: str) -> str:
-    """Detect the provider from PDF text."""
-    text_lower = text.lower()
+def detect_provider(pdf_path: str) -> str:
+    """Detect the provider from PDF file."""
+    logger.info(f"Detecting provider from PDF: {pdf_path}")
+    with pdfplumber.open(pdf_path) as pdf:
+        # Check first few pages for provider info
+        for page in pdf.pages[:3]:  # Check first 3 pages
+            text = page.extract_text()
+            if text:
+                text_lower = text.lower()
+                
+                if "zepto" in text_lower or "geddit convenience" in text_lower:
+                    logger.info("Detected provider: zepto")
+                    return "zepto"
+                elif "blinkit" in text_lower or "grofers" in text_lower:
+                    logger.info("Detected provider: blinkit")
+                    return "blinkit"
+                elif "swiggy" in text_lower or "instamart" in text_lower:
+                    logger.info("Detected provider: swiggy")
+                    return "swiggy"
     
-    if "zepto" in text_lower or "geddit convenience" in text_lower:
-        return "zepto"
-    elif "blinkit" in text_lower or "grofers" in text_lower:
-        return "blinkit"
-    elif "swiggy" in text_lower or "instamart" in text_lower:
-        return "swiggy"
-    
+    logger.warning("Could not detect provider, returning 'unknown'")
     return "unknown"
-
 
 def extract_from_zepto(pdf_path: str) -> ExtractionResult:
     """Extract items from Zepto PDF."""
+    logger.info("Starting Zepto extraction")
     items = []
-    provider = "zepto"
     
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            # Detect provider from text
-            text = page.extract_text()
-            if text:
-                provider = detect_provider(text)
             
             # Extract tables
             tables = page.extract_tables()
@@ -189,7 +217,210 @@ def extract_from_zepto(pdf_path: str) -> ExtractionResult:
                             unit=unit
                         ))
     
-    return ExtractionResult(provider=provider, items=items)
+    logger.info(f"Zepto extraction completed. Found {len(items)} items")
+    return ExtractionResult(provider="zepto", items=items)
+
+
+def extract_from_blinkit(pdf_path: str) -> ExtractionResult:
+    """Extract items from Blinkit PDF."""
+    logger.info("Starting Blinkit extraction")
+    items = []
+    
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            # Extract tables
+            tables = page.extract_tables()
+            
+            for table in tables:
+                if not table or len(table) < 2:
+                    continue
+                
+                # Find header row
+                header_idx = None
+                qty_col_idx = None
+                desc_col_idx = None
+                
+                for i, row in enumerate(table):
+                    if not row:
+                        continue
+                    
+                    row_text = ' '.join(str(cell).lower() if cell else '' for cell in row)
+                    
+                    # Look for header with "description" and "qty"
+                    if 'description' in row_text or 'item' in row_text or 'product' in row_text:
+                        header_idx = i
+                        
+                        # Find column indices
+                        for j, cell in enumerate(row):
+                            if cell:
+                                cell_lower = str(cell).lower()
+                                if 'description' in cell_lower or 'item' in cell_lower or 'product' in cell_lower:
+                                    desc_col_idx = j
+                                if 'qty' in cell_lower or 'quantity' in cell_lower:
+                                    qty_col_idx = j
+                        break
+                
+                if header_idx is None or desc_col_idx is None:
+                    continue
+                
+                # Extract items
+                for row in table[header_idx + 1:]:
+                    if not row or not any(row):
+                        continue
+                    
+                    # Skip total rows
+                    row_text = ' '.join(str(cell) if cell else '' for cell in row).lower()
+                    if 'total' in row_text or 'subtotal' in row_text:
+                        break
+                    
+                    # Get description
+                    description = str(row[desc_col_idx]) if desc_col_idx < len(row) and row[desc_col_idx] else None
+                    if not description or len(description.strip()) < 2:
+                        continue
+                    
+                    # Get quantity
+                    qty = 1.0
+                    if qty_col_idx is not None and qty_col_idx < len(row) and row[qty_col_idx]:
+                        try:
+                            qty = float(str(row[qty_col_idx]).strip())
+                        except ValueError:
+                            qty = 1.0
+                    
+                    # Parse unit info from description
+                    unit_value, unit = parse_unit_and_value(description)
+                    
+                    # Clean name
+                    clean_name = clean_item_name(description, unit_value, unit)
+                    
+                    if clean_name.lower() in BLINKIT_EXCLUDED_ITEMS:
+                        continue
+                    
+                    if clean_name:
+                        items.append(ExtractedItem(
+                            name=clean_name,
+                            count=qty,
+                            unit_value=unit_value,
+                            unit=unit
+                        ))
+    
+    logger.info(f"Blinkit extraction completed. Found {len(items)} items")
+    return ExtractionResult(provider="blinkit", items=items)
+
+
+def extract_from_swiggy(pdf_path: str) -> ExtractionResult:
+    """Extract items from Swiggy Instamart PDF."""
+    logger.info("Starting Swiggy extraction")
+    items = []
+    
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            # Extract tables
+            tables = page.extract_tables()
+            
+            for table in tables:
+                if not table or len(table) < 2:
+                    continue
+                
+                # Find header row
+                header_idx = None
+                qty_col_idx = None
+                desc_col_idx = None
+                
+                for i, row in enumerate(table):
+                    if not row:
+                        continue
+                    
+                    row_text = ' '.join(str(cell).lower() if cell else '' for cell in row)
+                    
+                    # Look for header with "description" and "qty"
+                    if 'description' in row_text or 'item' in row_text or 'product' in row_text:
+                        header_idx = i
+                        
+                        # Find column indices
+                        for j, cell in enumerate(row):
+                            if cell:
+                                cell_lower = str(cell).lower()
+                                if 'description' in cell_lower or 'item' in cell_lower or 'product' in cell_lower:
+                                    desc_col_idx = j
+                                if 'qty' in cell_lower or 'quantity' in cell_lower:
+                                    qty_col_idx = j
+                        break
+                
+                if header_idx is None or desc_col_idx is None:
+                    continue
+                
+                # Extract items
+                for row in table[header_idx + 1:]:
+                    if not row or not any(row):
+                        continue
+                    
+                    # Skip total rows
+                    row_text = ' '.join(str(cell) if cell else '' for cell in row).lower()
+                    if 'total' in row_text or 'subtotal' in row_text:
+                        break
+                    
+                    # Get description
+                    description = str(row[desc_col_idx]) if desc_col_idx < len(row) and row[desc_col_idx] else None
+                    if not description or len(description.strip()) < 2:
+                        continue
+                    
+                    # Get quantity
+                    qty = 1.0
+                    if qty_col_idx is not None and qty_col_idx < len(row) and row[qty_col_idx]:
+                        try:
+                            qty = float(str(row[qty_col_idx]).strip())
+                        except ValueError:
+                            qty = 1.0
+                    
+                    # Parse unit info from description
+                    unit_value, unit = parse_unit_and_value(description)
+                    
+                    # Clean name
+                    clean_name = clean_item_name(description, unit_value, unit)
+                    
+                    if clean_name:
+                        items.append(ExtractedItem(
+                            name=clean_name,
+                            count=qty,
+                            unit_value=unit_value,
+                            unit=unit
+                        ))
+    
+    logger.info(f"Swiggy extraction completed. Found {len(items)} items")
+    return ExtractionResult(provider="swiggy", items=items)
+
+
+def get_extraction_function(provider: str):
+    """
+    Strategy pattern: Return the appropriate extraction function based on provider.
+    
+    Args:
+        provider: The detected provider name (zepto, blinkit, swiggy, etc.)
+    
+    Returns:
+        The extraction function for the given provider
+    
+    Raises:
+        HTTPException: If provider is unknown or not supported
+    """
+    extraction_strategies = {
+        "zepto": extract_from_zepto,
+        "blinkit": extract_from_blinkit,
+        "swiggy": extract_from_swiggy,
+    }
+    
+    extraction_func = extraction_strategies.get(provider)
+    
+    if extraction_func is None:
+        logger.error(f"Unsupported provider: {provider}")
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Unsupported provider: {provider}. Supported providers: {', '.join(extraction_strategies.keys())}"
+        )
+    
+    logger.info(f"Selected extraction strategy for provider: {provider}")
+    return extraction_func
+
 
 
 @app.post("/extract", response_model=ExtractionResult)
@@ -198,8 +429,12 @@ async def extract_pdf(file: UploadFile = File(...)):
     Extract items from a PDF receipt.
     
     Accepts a PDF file and returns structured item data.
+    Automatically detects the provider and uses the appropriate extraction strategy.
     """
+    logger.info(f"Received PDF extraction request for file: {file.filename}")
+    
     if not file.filename.endswith('.pdf'):
+        logger.warning(f"Rejected non-PDF file: {file.filename}")
         raise HTTPException(status_code=400, detail="File must be a PDF")
     
     # Save to temp file
@@ -208,24 +443,42 @@ async def extract_pdf(file: UploadFile = File(...)):
         tmp.write(content)
         tmp_path = tmp.name
     
+    logger.info(f"Saved uploaded file to temporary location: {tmp_path}")
+    
     try:
-        # Extract items
-        result = extract_from_zepto(tmp_path)
+        # Step 1: Detect provider from PDF
+        provider = detect_provider(tmp_path)
+        
+        # Step 2: Get the appropriate extraction function using strategy pattern
+        extraction_func = get_extraction_function(provider)
+        
+        # Step 3: Call the extraction function
+        result = extraction_func(tmp_path)
+        
+        logger.info(f"Successfully extracted {len(result.items)} items from {file.filename}")
         return result
+    except HTTPException as he:
+        # Re-raise HTTP exceptions (like unsupported provider)
+        logger.error(f"HTTP error during extraction: {he.detail}")
+        raise
     except Exception as e:
+        logger.exception(f"Unexpected error during extraction of {file.filename}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Extraction failed: {str(e)}")
     finally:
         # Clean up temp file
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
+            logger.debug(f"Cleaned up temporary file: {tmp_path}")
 
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    logger.debug("Health check requested")
     return {"status": "healthy", "service": "pdf-extractor"}
 
 
 if __name__ == "__main__":
     import uvicorn
+    logger.info("Starting PDF Extraction Service on port 8081...")
     uvicorn.run(app, host="0.0.0.0", port=8081)

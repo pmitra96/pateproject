@@ -50,7 +50,7 @@ BACKEND_PID=$!
 
 # 3. Start Python Extractor
 echo "🐍 Starting PDF Extractor (Python)... [Logs: python-extractor.log]"
-(cd python-extractor && python3 app.py) > python-extractor.log 2>&1 &
+(cd python-extractor && python app.py) > python-extractor.log 2>&1 &
 PYTHON_PID=$!
 
 # 4. Start Frontend

@@ -47,20 +47,12 @@ func ExtractItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try Python extractor first
 	pythonURL := config.GetEnv("PYTHON_EXTRACTOR_URL", "http://localhost:8081")
 	result, err := callPythonExtractor(pythonURL, tempFile.Name())
 
 	if err != nil {
-		logger.Warn("Python extractor failed, falling back to Go extractor", "error", err)
-
-		// Fallback to Go extractor
-		result, err = extractor.ParseInvoice(tempFile.Name())
-		if err != nil {
-			logger.Error("Go extraction also failed", "error", err)
-			http.Error(w, "Failed to extract data: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+		http.Error(w, "Failed to extract data: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	logger.Info("Extraction completed successfully", "provider", result.Provider, "items_found", len(result.Items))
@@ -120,6 +112,13 @@ func callPythonExtractor(baseURL string, pdfPath string) (*extractor.ExtractionR
 	if err != nil {
 		return nil, err
 	}
+
+	logger.Info("result", result)
+
+	// logger.Info("Extraction completed successfully", "provider", result.Provider, "items_found", len(result.Items))
+	// for _, item := range result.Items {
+	// 	logger.Info("Item found", "name", item.Name, "count", item.Count, "unit_val", item.UnitValue, "unit", item.Unit)
+	// }
 
 	return &result, nil
 }

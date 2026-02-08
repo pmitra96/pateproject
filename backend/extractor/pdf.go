@@ -293,17 +293,16 @@ func extractItemFromBlock(block []rowData, nameColX, qtyColX float64) *Extracted
 
 	// Only create item if we have both name and quantity
 	if len(nameParts) > 0 && qty > 0 {
-		// Join without spaces first (PDF extracts char-by-char)
-		fullName := strings.Join(nameParts, "")
+		// Join with spaces (PDF extracts char-by-char or word-by-word)
+		fullName := strings.Join(nameParts, " ")
 
 		// IMPORTANT: Extract unit info from the ORIGINAL fullName BEFORE any cleaning
 		// This captures patterns like (1kg), 500g, etc.
 		uv, unit := parseUnitAndValue(fullName)
 
 		// Now clean up the name (remove unit info, codes, etc)
-		// First, remove units that might be concatenated at the end (case-insensitive)
-		// Only match if preceded by a letter (to avoid matching single 'l' in 'Local')
-		cleanName := regexp.MustCompile(`(?i)([a-z])(pc|pcs|kg|g|ml)$`).ReplaceAllString(fullName, "$1")
+		// Remove standalone units at the end (with word boundary or space before)
+		cleanName := regexp.MustCompile(`(?i)\s+(pc|pcs|kg|g|ml|l)$`).ReplaceAllString(fullName, "")
 
 		// Remove parenthetical units like (kg), (1kg), etc
 		cleanName = regexp.MustCompile(`(?i)\([^)]*?(kg|g|ml|l|pc|pcs)[^)]*?\)`).ReplaceAllString(cleanName, "")

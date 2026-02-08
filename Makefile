@@ -24,6 +24,9 @@ logs:
 logs-frontend:
 	tail -f frontend.log
 
+logs-python:
+	tail -f python-extractor.log
+
 # Individual services
 backend:
 	cd backend && go run ./cmd/server/main.go
