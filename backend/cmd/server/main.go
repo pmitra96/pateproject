@@ -6,6 +6,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/pmitra96/pateproject/config"
 	"github.com/pmitra96/pateproject/database"
+	"github.com/pmitra96/pateproject/jobs"
 	"github.com/pmitra96/pateproject/logger"
 	"github.com/pmitra96/pateproject/routes"
 )
@@ -21,6 +22,9 @@ func main() {
 
 	// Initialize DB
 	database.InitDB()
+
+	// Start background nutrition worker
+	jobs.GetWorker()
 
 	// Setup Router
 	r := routes.SetupRouter()

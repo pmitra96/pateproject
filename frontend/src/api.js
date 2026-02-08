@@ -146,3 +146,38 @@ export const deleteGoal = async (goalId) => {
   });
   if (!res.ok) throw new Error('Failed to delete goal');
 };
+
+export const logMeal = async (meal) => {
+  const res = await fetch(`${API_BASE}/meals/log`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({
+      name: meal.name,
+      ingredients: meal.ingredients,
+      calories: meal.calories,
+      protein: meal.protein
+    })
+  });
+  if (!res.ok) throw new Error('Failed to log meal');
+  return res.json();
+};
+
+export const fetchMealHistory = async () => {
+  const res = await fetch(`${API_BASE}/meals`, {
+    headers: getAuthHeader()
+  });
+  if (!res.ok) throw new Error('Failed to fetch meal history');
+  return res.json();
+};
+
+export const deleteMealLog = async (mealId) => {
+  const res = await fetch(`${API_BASE}/meals/${mealId}`, {
+    method: 'DELETE',
+    headers: getAuthHeader()
+  });
+  if (!res.ok) throw new Error('Failed to delete meal');
+  return res.json();
+};

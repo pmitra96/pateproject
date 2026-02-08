@@ -286,9 +286,15 @@ func (c *Client) SuggestMeals(inventory []InventoryItem) (string, error) {
 
 %s
 
-Suggest 3 meals I can make. For each meal:
+Suggest 3 meals I can make. 
+
+IMPORTANT RULES:
+1. Portions MUST be for exactly 1 person (one serving).
+2. Each ingredient must include a weight or quantity (e.g., "100g Paneer", "2 Eggs").
+
+For each meal:
 1. Name of the dish
-2. Which ingredients from my pantry it uses
+2. Which ingredients from my pantry it uses (with specific weight/quantity)
 3. Brief cooking instructions (2-3 sentences)
 
 Format each meal clearly with the dish name as a header.`, items)
@@ -352,6 +358,10 @@ func (c *Client) SuggestMealsPersonalized(inventory []InventoryItem, goals []Goa
 
 Suggest 3 %s options that align with my goals.
 
+IMPORTANT RULES:
+1. All meal portions MUST be calculated for EXACTLY 1 serving (for one person).
+2. Each ingredient in the "ingredients" list must include a specific weight/quantity (e.g., "150g Chicken breast", "2 Eggs", "1 cup Rice").
+
 IMPORTANT: Return ONLY valid JSON in this exact format, no other text:
 {
   "goal": "%s",
@@ -359,7 +369,7 @@ IMPORTANT: Return ONLY valid JSON in this exact format, no other text:
   "meals": [
     {
       "name": "Dish Name",
-      "ingredients": ["ingredient 1", "ingredient 2"],
+      "ingredients": ["100g ingredient 1", "2 units ingredient 2"],
       "instructions": "Step by step cooking instructions",
       "prep_time": "10 mins",
       "calories": "200-250",
@@ -389,8 +399,9 @@ Meal suggestions:
 Judge each meal on:
 1. **Authenticity**: Are these real, properly named dishes? Are cooking instructions realistic?
 2. **Goal alignment**: Do calories/protein match the stated goal?
-3. **Ingredient accuracy**: Are the ingredients properly used?
-4. **Nutritional accuracy**: Are calorie/protein estimates reasonable?
+3. **Serving Size**: Is the meal strictly for EXACTLY 1 serving (one person)?
+4. **Ingredient Detail**: Does every ingredient include a specific weight or quantity (e.g., "100g", "2 units")?
+5. **Nutritional accuracy**: Are calorie/protein estimates reasonable for the given quantities?
 
 Return ONLY valid JSON:
 {
@@ -402,7 +413,7 @@ Return ONLY valid JSON:
 }`, goalsSummary, initialResponse)
 
 	judgeMessages := []Message{
-		{Role: "system", Content: "You are a strict nutrition and culinary expert. Evaluate meal suggestions critically. Return ONLY valid JSON."},
+		{Role: "system", Content: "You are a strict nutrition and culinary expert. Evaluate meal suggestions critically. Return ONLY valid JSON. Focus on serving size (1 person) and ingredient weights."},
 		{Role: "user", Content: judgePrompt},
 	}
 
@@ -426,6 +437,10 @@ Original suggestions:
 Expert feedback:
 %s
 
+CRITICAL RULES TO FIX:
+1. Every meal MUST be for exactly 1 serving.
+2. Every ingredient MUST have a weight/quantity (e.g. "100g Paneer").
+
 Fix ALL issues mentioned. Return the improved suggestions in the SAME JSON format:
 {
   "goal": "%s",
@@ -433,7 +448,7 @@ Fix ALL issues mentioned. Return the improved suggestions in the SAME JSON forma
   "meals": [
     {
       "name": "Dish Name",
-      "ingredients": ["ingredient 1", "ingredient 2"],
+      "ingredients": ["100g ingredient 1", "2 units ingredient 2"],
       "instructions": "Detailed step by step cooking instructions",
       "prep_time": "15 mins",
       "calories": "200-250",
@@ -443,7 +458,7 @@ Fix ALL issues mentioned. Return the improved suggestions in the SAME JSON forma
   ]
 }
 
-Make dishes more authentic with proper names, realistic cooking times, and accurate nutritional info.`, initialResponse, judgeResponse, goalsSummary, mealType)
+Make dishes more authentic with proper names, realistic cooking times, and accurate nutritional info and serving sizes.`, initialResponse, judgeResponse, goalsSummary, mealType)
 
 	refineMessages := []Message{
 		{Role: "system", Content: "You are an expert chef and nutritionist. Improve meal suggestions based on feedback. Return ONLY valid JSON."},
