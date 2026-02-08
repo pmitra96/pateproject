@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pmitra96/pateproject/database"
+	"github.com/pmitra96/pateproject/llm"
 	"github.com/pmitra96/pateproject/logger"
 	"github.com/pmitra96/pateproject/models"
 	"gorm.io/gorm"
@@ -151,42 +152,106 @@ func IngestOrder(w http.ResponseWriter, r *http.Request) {
 
 	logger.Info("Order created successfully", "order_id", order.ID, "user_id", user.ID)
 
+	llmClient := llm.NewClient()
+
+	// 1. Batch Cache Lookup
+	rawNames := make([]string, 0, len(req.Items))
+	rawNamesMap := make(map[string]bool)
+	for _, it := range req.Items {
+		if !rawNamesMap[it.RawName] {
+			rawNames = append(rawNames, it.RawName)
+			rawNamesMap[it.RawName] = true
+		}
+	}
+
+	var existingItems []models.Item
+	tx.Preload("Ingredient").Preload("Brand").Where("name IN ?", rawNames).Find(&existingItems)
+	itemMap := make(map[string]models.Item)
+	for _, it := range existingItems {
+		itemMap[it.Name] = it
+	}
+
+	// 2. Identify missing items and extract in batch
+	var missingNames []string
+	for _, name := range rawNames {
+		if _, ok := itemMap[name]; !ok {
+			missingNames = append(missingNames, name)
+		}
+	}
+
+	if len(missingNames) > 0 {
+		logger.Info("Performing batch LLM extraction", "count", len(missingNames))
+		extractions, err := llmClient.ExtractPantryItemsBatch(missingNames)
+		if err != nil || len(extractions) != len(missingNames) {
+			logger.Warn("Batch LLM extraction failed or returned mismatched count, using heuristics", "error", err)
+			extractions = make([]llm.PantryItemExtraction, len(missingNames))
+			for i, name := range missingNames {
+				extractions[i] = *llmClient.ExtractHeuristic(name)
+			}
+		}
+
+		// Process extractions and create missing items
+		for i, name := range missingNames {
+			ext := extractions[i]
+
+			// Resolve Ingredient
+			var ingredient models.Ingredient
+			tx.Where("LOWER(name) = ?", strings.ToLower(ext.Ingredient)).FirstOrCreate(&ingredient, models.Ingredient{Name: ext.Ingredient})
+
+			// Resolve Brand
+			var brandID *uint
+			if ext.Brand != nil && *ext.Brand != "" {
+				var brand models.Brand
+				tx.Where("LOWER(name) = ?", strings.ToLower(*ext.Brand)).FirstOrCreate(&brand, models.Brand{Name: *ext.Brand})
+				brandID = &brand.ID
+			}
+
+			// Create Item
+			productName := ""
+			if ext.Product != nil {
+				productName = *ext.Product
+			}
+
+			unit := "pcs"
+			for _, ri := range req.Items {
+				if ri.RawName == name {
+					unit = strings.ToLower(ri.Unit)
+					if unit == "kg" {
+						unit = "g"
+					} else if unit == "l" {
+						unit = "ml"
+					}
+					break
+				}
+			}
+
+			newItem := models.Item{
+				Name:         name,
+				IngredientID: ingredient.ID,
+				BrandID:      brandID,
+				ProductName:  productName,
+				Unit:         unit,
+			}
+			tx.Create(&newItem)
+			itemMap[name] = newItem
+		}
+	}
+
+	// 3. Process all items (OrderItems and Pantry aggregation)
 	for _, reqItem := range req.Items {
+		item, ok := itemMap[reqItem.RawName]
+		if !ok {
+			logger.Error("Item mapping missing for raw name", "raw_name", reqItem.RawName)
+			continue
+		}
+
 		// Unit Normalization (Base Units: g, ml)
 		quantity := reqItem.Quantity
 		unit := strings.ToLower(reqItem.Unit)
-
 		if unit == "kg" {
 			quantity *= 1000
-			unit = "g"
 		} else if unit == "l" {
 			quantity *= 1000
-			unit = "ml"
-		}
-
-		// 1. Find or Create Canonical Item
-		var item models.Item
-		// transform to lower case for canonical check
-		canonicalName := strings.TrimSpace(strings.ToLower(reqItem.RawName))
-
-		// Simple canonical logic: find by name.
-		if err := tx.Where("LOWER(name) = ?", canonicalName).First(&item).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				// Create new Item
-				item = models.Item{
-					Name: reqItem.RawName, // Use original casing for display
-					Unit: unit,
-				}
-				if err := tx.Create(&item).Error; err != nil {
-					tx.Rollback()
-					http.Error(w, "Failed to create item: "+err.Error(), http.StatusInternalServerError)
-					return
-				}
-			} else {
-				tx.Rollback()
-				http.Error(w, "Database error looking up item", http.StatusInternalServerError)
-				return
-			}
 		}
 
 		// 2. Create Order Item
@@ -202,13 +267,13 @@ func IngestOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 3. Update Pantry State
-		// Find existing pantry item
+		// 3. Update Pantry State (Aggregated by Ingredient)
 		var pantryItem models.PantryItem
-		if err := tx.Where("user_id = ? AND item_id = ?", user.ID, item.ID).First(&pantryItem).Error; err != nil {
+		if err := tx.Where("user_id = ? AND ingredient_id = ?", user.ID, item.IngredientID).First(&pantryItem).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				pantryItem = models.PantryItem{
 					UserID:          user.ID,
+					IngredientID:    item.IngredientID,
 					ItemID:          item.ID,
 					DerivedQuantity: 0,
 				}
@@ -224,8 +289,9 @@ func IngestOrder(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Update derived quantity
+		// Update Aggregated state
 		pantryItem.DerivedQuantity += quantity
+		pantryItem.ItemID = item.ID // Update to the most recent specific item (brand/product)
 		if err := tx.Save(&pantryItem).Error; err != nil {
 			tx.Rollback()
 			http.Error(w, "Failed to update pantry state", http.StatusInternalServerError)

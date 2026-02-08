@@ -31,15 +31,39 @@ type UserIdentity struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
-// Item represents a canonical grocery item.
+// Ingredient represents a canonical, brand-agnostic ingredient name.
+type Ingredient struct {
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	Name      string         `gorm:"size:255;uniqueIndex;not null" json:"name"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// Brand represents a manufacturer or brand name.
+type Brand struct {
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	Name      string         `gorm:"size:255;uniqueIndex;not null" json:"name"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// Item represents a specific product linked to an ingredient and optionally a brand.
 type Item struct {
 	ID            uint           `gorm:"primaryKey" json:"id"`
-	Name          string         `gorm:"size:255;uniqueIndex;not null" json:"name"`
-	DefaultUnitID uint           `gorm:"default:1" json:"-"`           // Added to match existing DB constraint
+	Name          string         `gorm:"size:255;uniqueIndex;not null" json:"name"` // Full display name
+	IngredientID  uint           `gorm:"not null;index" json:"ingredient_id"`
+	BrandID       *uint          `gorm:"index" json:"brand_id"`
+	ProductName   string         `gorm:"size:255" json:"product_name"` // e.g., "Taaza Toned Milk"
+	DefaultUnitID uint           `gorm:"default:1" json:"-"`
 	Unit          string         `gorm:"size:50;not null" json:"unit"` // Normalized unit (g, ml, pcs)
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
+
+	Ingredient Ingredient `gorm:"foreignKey:IngredientID" json:"ingredient,omitempty"`
+	Brand      *Brand     `gorm:"foreignKey:BrandID" json:"brand,omitempty"`
 }
 
 // Order represents an ingested grocery order.
@@ -75,16 +99,18 @@ type OrderItem struct {
 }
 
 // PantryItem represents the current state of an item in a user's pantry.
-// "Pantry quantity = derived_quantity unless overridden"
+// We aggregate by IngredientID to handle different brands/products of the same ingredient.
 type PantryItem struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`
-	UserID          uint      `gorm:"not null;uniqueIndex:idx_user_item" json:"user_id"`
-	ItemID          uint      `gorm:"not null;uniqueIndex:idx_user_item" json:"item_id"`
-	DerivedQuantity float64   `gorm:"default:0" json:"derived_quantity"` // Sum of all orders
-	ManualQuantity  *float64  `json:"manual_quantity"`                   // User override (nullable)
+	UserID          uint      `gorm:"not null;uniqueIndex:idx_user_ingredient" json:"user_id"`
+	IngredientID    uint      `gorm:"not null;uniqueIndex:idx_user_ingredient" json:"ingredient_id"`
+	ItemID          uint      `gorm:"not null" json:"item_id"` // Representative item (most recently purchased)
+	DerivedQuantity float64   `gorm:"default:0" json:"derived_quantity"`
+	ManualQuantity  *float64  `json:"manual_quantity"`
 	LastUpdated     time.Time `gorm:"autoUpdateTime" json:"last_updated"`
 
-	Item Item `gorm:"foreignKey:ItemID" json:"item"`
+	Ingredient Ingredient `gorm:"foreignKey:IngredientID" json:"ingredient"`
+	Item       Item       `gorm:"foreignKey:ItemID" json:"item"`
 }
 
 // EffectiveQuantity returns the quantity the user sees.

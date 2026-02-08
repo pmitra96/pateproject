@@ -220,7 +220,7 @@ function App() {
     setIsLoadingSuggestions(true);
     try {
       const inventory = pantry.map(item => ({
-        name: item.item.name,
+        name: item.item.ingredient?.name || item.item.name,
         quantity: item.effective_quantity,
         unit: item.item.unit
       }));
@@ -419,7 +419,17 @@ function App() {
                               onChange={() => handleSelectItem(item.item_id)}
                             />
                           </td>
-                          <td style={{ padding: '0.75rem 0' }}>{item.item.name}</td>
+                          <td style={{ padding: '0.75rem 0' }}>
+                            <div style={{ fontWeight: 600 }}>{item.ingredient?.name || item.item.name}</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}>
+                              {item.item.brand?.name && (
+                                <span className="badge" style={{ padding: '0.1rem 0.3rem', marginRight: '0.4rem', background: '#fef3c7', color: '#92400e', fontSize: '0.65rem' }}>
+                                  {item.item.brand.name}
+                                </span>
+                              )}
+                              {item.item.product_name || item.item.name}
+                            </div>
+                          </td>
                           <td style={{ padding: '0.75rem 0', fontWeight: 600, color: isLow ? 'var(--danger)' : 'inherit' }}>
                             {item.effective_quantity}
                           </td>
@@ -528,8 +538,14 @@ function App() {
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                     {order.items?.map((item, i) => (
-                      <div key={i} className="badge" style={{ background: 'transparent', border: '1px solid var(--border-color)' }}>
-                        {item.item?.name || item.raw_name} × {item.quantity}
+                      <div key={i} className="badge" style={{ background: 'transparent', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '0.5rem 0.75rem', borderRadius: '8px' }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{item.item?.ingredient?.name || item.item?.name || item.raw_name}</div>
+                        {(item.item?.brand?.name || item.item?.product_name) && (
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                            {item.item?.brand?.name} {item.item?.product_name}
+                          </div>
+                        )}
+                        <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', fontWeight: 500 }}>Qty: {item.quantity}</div>
                       </div>
                     ))}
                   </div>

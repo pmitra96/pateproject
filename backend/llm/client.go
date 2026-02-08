@@ -125,6 +125,147 @@ type InventoryItem struct {
 	Unit     string  `json:"unit"`
 }
 
+type PantryItemExtraction struct {
+	Ingredient string  `json:"ingredient"`
+	Brand      *string `json:"brand"`
+	Product    *string `json:"product"`
+	Nutrition  any     `json:"nutrition"`
+}
+
+func (c *Client) ExtractPantryItemInfo(rawName string) (*PantryItemExtraction, error) {
+	prompt := fmt.Sprintf(`Split this raw pantry item name into structured fields: "%s"
+
+Rules:
+- ingredient: the canonical, brand-agnostic ingredient name (e.g., "Milk", "Curd", "Bread"). Must not contain brand names.
+- brand: the brand or manufacturer name (e.g., "Amul", "Akshayakalpa"). Return null if not present.
+- product: the brand-specific product name WITHOUT the brand (e.g., "Taaza Toned Milk", "Artisanal Organic Set Curd"). Return null if not present.
+- nutrition: always return null.
+
+If a field cannot be confidently determined, return null. Do not invent or guess information.
+
+IMPORTANT: Return ONLY valid JSON in this exact format:
+{
+  "ingredient": "string",
+  "brand": "string or null",
+  "product": "string or null",
+  "nutrition": null
+}`, rawName)
+
+	messages := []Message{
+		{Role: "system", Content: "You are a data extraction assistant. Return ONLY valid JSON."},
+		{Role: "user", Content: prompt},
+	}
+
+	response, err := c.Chat(messages)
+	if err != nil {
+		return nil, err
+	}
+
+	// Clean up potential markdown code blocks
+	response = strings.TrimPrefix(response, "```json")
+	response = strings.TrimPrefix(response, "```")
+	response = strings.TrimSuffix(response, "```")
+	response = strings.TrimSpace(response)
+
+	var extraction PantryItemExtraction
+	if err := json.Unmarshal([]byte(response), &extraction); err != nil {
+		return nil, fmt.Errorf("failed to parse extraction response: %w - response: %s", err, response)
+	}
+
+	return &extraction, nil
+}
+
+func (c *Client) ExtractPantryItemsBatch(rawNames []string) ([]PantryItemExtraction, error) {
+	if len(rawNames) == 0 {
+		return nil, nil
+	}
+
+	itemsList := strings.Join(rawNames, "\n- ")
+	prompt := fmt.Sprintf(`Split these raw pantry item names into structured fields. Return a JSON array of objects.
+
+Items:
+- %s
+
+Rules for each object:
+- ingredient: the canonical, brand-agnostic ingredient name (e.g., "Milk", "Curd", "Bread"). Must not contain brand names.
+- brand: the brand or manufacturer name (e.g., "Amul", "Akshayakalpa"). Return null if not present.
+- product: the brand-specific product name WITHOUT the brand (e.g., "Taaza Toned Milk", "Artisanal Organic Set Curd").
+- nutrition: always return null.
+
+Format:
+[
+  {"ingredient": "...", "brand": "...", "product": "...", "nutrition": null},
+  ...
+]`, itemsList)
+
+	resp, err := c.Chat([]Message{
+		{Role: "system", Content: "You are a grocery data expert. You specialize in normalizing item names into canonical ingredients and brands. Always return valid JSON only."},
+		{Role: "user", Content: prompt},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Clean output from possible markdown code blocks
+	cleanResp := strings.TrimSpace(resp)
+	if strings.HasPrefix(cleanResp, "```json") {
+		cleanResp = strings.TrimPrefix(cleanResp, "```json")
+		cleanResp = strings.TrimSuffix(cleanResp, "```")
+	} else if strings.HasPrefix(cleanResp, "```") {
+		cleanResp = strings.TrimPrefix(cleanResp, "```")
+		cleanResp = strings.TrimSuffix(cleanResp, "```")
+	}
+
+	var extractions []PantryItemExtraction
+	if err := json.Unmarshal([]byte(cleanResp), &extractions); err != nil {
+		return nil, fmt.Errorf("failed to parse batch extraction JSON: %w", err)
+	}
+
+	return extractions, nil
+}
+
+// ExtractHeuristic provides a basic rule-based split when LLM is unavailable.
+func (c *Client) ExtractHeuristic(rawName string) *PantryItemExtraction {
+	lowerName := strings.ToLower(rawName)
+
+	commonBrands := []string{"amul", "mooz", "akshayakalpa", "mother dairy", "milky mist", "britannia", "nestle", "urban platter", "dehaat", "honest farms", "hen fruit", "blinkit", "zepto", "swiggy", "instamart", "tata sampann", "tata", "fortune", "aashirvaad", "dabur", "haldiram", "epigamia"}
+	commonIngredients := []string{"milk", "curd", "tofu", "bread", "egg", "eggs", "paneer", "butter", "cheese", "tomato", "potato", "onion", "broccoli", "peanuts", "atta", "wheat", "rice", "kala chana", "chana", "dal", "moong", "masoor", "besan", "sugar", "salt", "oil", "ghee"}
+
+	var foundBrand *string
+	var foundIngredient string = rawName // Default to raw name
+
+	// 1. Try to find a brand
+	for _, brand := range commonBrands {
+		if strings.Contains(lowerName, brand) {
+			b := strings.Title(brand)
+			foundBrand = &b
+			break
+		}
+	}
+
+	// 2. Try to find a canonical ingredient
+	for _, ing := range commonIngredients {
+		if strings.Contains(lowerName, ing) {
+			foundIngredient = strings.Title(ing)
+			break
+		}
+	}
+
+	// 3. Simple product name: strip the brand if found
+	productName := rawName
+	if foundBrand != nil {
+		productName = strings.TrimSpace(strings.ReplaceAll(lowerName, strings.ToLower(*foundBrand), ""))
+		productName = strings.Title(productName)
+	}
+
+	return &PantryItemExtraction{
+		Ingredient: foundIngredient,
+		Brand:      foundBrand,
+		Product:    &productName,
+		Nutrition:  nil,
+	}
+}
+
 type GoalInfo struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
