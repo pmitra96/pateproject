@@ -124,6 +124,11 @@ type InventoryItem struct {
 	Unit     string  `json:"unit"`
 }
 
+type GoalInfo struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
 func (c *Client) SuggestMeals(inventory []InventoryItem) (string, error) {
 	if len(inventory) == 0 {
 		return "", fmt.Errorf("no inventory items provided")
@@ -148,6 +153,82 @@ Format each meal clearly with the dish name as a header.`, items)
 
 	messages := []Message{
 		{Role: "system", Content: "You are a helpful cooking assistant. Suggest practical, easy-to-make meals based on available ingredients."},
+		{Role: "user", Content: prompt},
+	}
+
+	return c.Chat(messages)
+}
+
+func (c *Client) SuggestMealsPersonalized(inventory []InventoryItem, goals []GoalInfo, timeOfDay string) (string, error) {
+	if len(inventory) == 0 {
+		return "", fmt.Errorf("no inventory items provided")
+	}
+
+	// Build inventory list
+	var items string
+	for _, item := range inventory {
+		items += fmt.Sprintf("- %s: %.0f %s\n", item.Name, item.Quantity, item.Unit)
+	}
+
+	// Build goals list
+	var goalsText string
+	var goalsSummary string
+	if len(goals) > 0 {
+		goalsText = "\n\nMy health/fitness goals:\n"
+		for i, goal := range goals {
+			goalsText += fmt.Sprintf("- %s", goal.Title)
+			if goal.Description != "" {
+				goalsText += fmt.Sprintf(": %s", goal.Description)
+			}
+			goalsText += "\n"
+			if i == 0 {
+				goalsSummary = goal.Title
+			}
+		}
+	} else {
+		goalsText = "\n\nNo specific health goals set."
+		goalsSummary = "General healthy eating"
+	}
+
+	// Time context
+	mealType := "meal"
+	switch timeOfDay {
+	case "morning":
+		mealType = "breakfast"
+	case "afternoon":
+		mealType = "lunch"
+	case "evening":
+		mealType = "dinner"
+	case "night":
+		mealType = "light snack"
+	}
+
+	prompt := fmt.Sprintf(`Based on these ingredients in my pantry:
+
+%s
+%s
+
+Suggest 3 %s options that align with my goals.
+
+IMPORTANT: Return ONLY valid JSON in this exact format, no other text:
+{
+  "goal": "%s",
+  "meal_type": "%s",
+  "meals": [
+    {
+      "name": "Dish Name",
+      "ingredients": ["ingredient 1", "ingredient 2"],
+      "instructions": "Step by step cooking instructions",
+      "prep_time": "10 mins",
+      "calories": "200-250",
+      "protein": "15g",
+      "benefits": "How this helps achieve the goal"
+    }
+  ]
+}`, items, goalsText, mealType, goalsSummary, mealType)
+
+	messages := []Message{
+		{Role: "system", Content: "You are a nutritionist. Return ONLY valid JSON, no markdown, no explanation. Follow the exact JSON structure requested."},
 		{Role: "user", Content: prompt},
 	}
 

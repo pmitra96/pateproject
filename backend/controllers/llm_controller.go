@@ -29,6 +29,12 @@ type MealSuggestionResponse struct {
 	Suggestions string `json:"suggestions"`
 }
 
+type PersonalizedMealRequest struct {
+	Inventory []llm.InventoryItem `json:"inventory"`
+	Goals     []llm.GoalInfo      `json:"goals"`
+	TimeOfDay string              `json:"time_of_day"`
+}
+
 func GenerateStory(w http.ResponseWriter, r *http.Request) {
 	logger.Info("Received story generation request")
 
@@ -87,6 +93,43 @@ func SuggestMeal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logger.Info("Meal suggestions generated successfully", "items_count", len(req.Inventory))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(MealSuggestionResponse{
+		Suggestions: suggestions,
+	})
+}
+
+func SuggestMealPersonalized(w http.ResponseWriter, r *http.Request) {
+	logger.Info("Received personalized meal suggestion request")
+
+	var req PersonalizedMealRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid request body"})
+		return
+	}
+
+	if len(req.Inventory) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "No inventory items provided"})
+		return
+	}
+
+	client := llm.NewClient()
+	suggestions, err := client.SuggestMealsPersonalized(req.Inventory, req.Goals, req.TimeOfDay)
+
+	if err != nil {
+		logger.Error("Failed to generate personalized meal suggestions", "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	logger.Info("Personalized meal suggestions generated", "items_count", len(req.Inventory), "goals_count", len(req.Goals), "time", req.TimeOfDay)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(MealSuggestionResponse{

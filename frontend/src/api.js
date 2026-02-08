@@ -88,3 +88,49 @@ export const suggestMeal = async (inventory) => {
   }
   return response.json();
 };
+
+export const suggestMealPersonalized = async (inventory, goals, timeOfDay) => {
+  const response = await fetch(`${API_BASE}/llm/suggest-meal-personalized`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({ inventory, goals, time_of_day: timeOfDay }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || 'Failed to get meal suggestions');
+  }
+  return response.json();
+};
+
+export const fetchGoals = async () => {
+  const res = await fetch(`${API_BASE}/goals`, {
+    headers: getAuthHeader()
+  });
+  if (!res.ok) throw new Error('Failed to fetch goals');
+  return res.json();
+};
+
+export const createGoal = async (title, description) => {
+  const res = await fetch(`${API_BASE}/goals`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({ title, description })
+  });
+  if (!res.ok) throw new Error('Failed to create goal');
+  return res.json();
+};
+
+export const deleteGoal = async (goalId) => {
+  const res = await fetch(`${API_BASE}/goals/${goalId}`, {
+    method: 'DELETE',
+    headers: getAuthHeader()
+  });
+  if (!res.ok) throw new Error('Failed to delete goal');
+};

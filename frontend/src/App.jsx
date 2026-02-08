@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { GoogleLogin } from '@react-oauth/google';
 import { jwtDecode } from 'jwt-decode';
-import { fetchPantry, updatePantryItem, deletePantryItem, extractItems, ingestOrder, suggestMeal } from './api';
+import { fetchPantry, updatePantryItem, deletePantryItem, extractItems, ingestOrder, suggestMealPersonalized, fetchGoals, createGoal, deleteGoal } from './api';
 
 function App() {
   const [pantry, setPantry] = useState([]);
@@ -18,6 +18,10 @@ function App() {
   const [isExtracting, setIsExtracting] = useState(false);
   const [mealSuggestions, setMealSuggestions] = useState(null);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+  const [goals, setGoals] = useState([]);
+  const [showAddGoal, setShowAddGoal] = useState(false);
+  const [newGoalTitle, setNewGoalTitle] = useState('');
+  const [newGoalDescription, setNewGoalDescription] = useState('');
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -57,6 +61,11 @@ function App() {
       if (activeTab === 'inventory') {
         const data = await fetchPantry();
         setPantry(data);
+        const goalsData = await fetchGoals();
+        setGoals(goalsData || []);
+      } else if (activeTab === 'goals') {
+        const goalsData = await fetchGoals();
+        setGoals(goalsData || []);
       } else if (activeTab === 'history') {
         const res = await fetch('http://localhost:8080/orders', {
           headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
@@ -149,6 +158,14 @@ function App() {
     item.item.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const getTimeOfDay = () => {
+    const hour = new Date().getHours();
+    if (hour >= 5 && hour < 12) return 'morning';
+    if (hour >= 12 && hour < 17) return 'afternoon';
+    if (hour >= 17 && hour < 21) return 'evening';
+    return 'night';
+  };
+
   const handleSuggestMeal = async () => {
     if (pantry.length === 0) {
       alert('No items in pantry to suggest meals from');
@@ -161,13 +178,45 @@ function App() {
         quantity: item.effective_quantity,
         unit: item.item.unit
       }));
-      const result = await suggestMeal(inventory);
+      const goalsForLLM = goals.map(g => ({
+        title: g.title,
+        description: g.description || ''
+      }));
+      const result = await suggestMealPersonalized(inventory, goalsForLLM, getTimeOfDay());
       setMealSuggestions(result.suggestions);
     } catch (err) {
       console.error('Failed to get meal suggestions', err);
       alert('Failed to get meal suggestions: ' + err.message);
     } finally {
       setIsLoadingSuggestions(false);
+    }
+  };
+
+  const handleAddGoal = async () => {
+    if (!newGoalTitle.trim()) {
+      alert('Please enter a goal title');
+      return;
+    }
+    try {
+      await createGoal(newGoalTitle, newGoalDescription);
+      const goalsData = await fetchGoals();
+      setGoals(goalsData || []);
+      setNewGoalTitle('');
+      setNewGoalDescription('');
+      setShowAddGoal(false);
+    } catch (err) {
+      console.error('Failed to create goal', err);
+      alert('Failed to create goal');
+    }
+  };
+
+  const handleDeleteGoal = async (goalId) => {
+    try {
+      await deleteGoal(goalId);
+      setGoals(goals.filter(g => g.id !== goalId));
+    } catch (err) {
+      console.error('Failed to delete goal', err);
+      alert('Failed to delete goal');
     }
   };
 
@@ -201,6 +250,7 @@ function App() {
 
       <div className="tabs">
         <div className={`tab ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')}>Inventory</div>
+        <div className={`tab ${activeTab === 'goals' ? 'active' : ''}`} onClick={() => setActiveTab('goals')}>My Goals</div>
         <div className={`tab ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')}>Order History</div>
         <div className={`tab ${activeTab === 'upload' ? 'active' : ''}`} onClick={() => setActiveTab('upload')}>Upload Invoice</div>
       </div>
@@ -266,6 +316,74 @@ function App() {
                 </tbody>
               </table>
             </div>
+          )}
+        </section>
+      )}
+
+      {activeTab === 'goals' && (
+        <section>
+          {!user ? (
+            <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>Please log in to manage your goals.</div>
+          ) : loading ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}><div className="loader"></div></div>
+          ) : (
+            <>
+              <div className="glass-panel p-6 mb-4">
+                <div className="flex-between mb-4">
+                  <h2 style={{ margin: 0 }}>🎯 My Health Goals</h2>
+                  <button className="btn" onClick={() => setShowAddGoal(true)}>+ Add Goal</button>
+                </div>
+                {goals.length === 0 ? (
+                  <p className="text-secondary">No goals set yet. Add a goal to get personalized meal suggestions!</p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {goals.map(goal => (
+                      <div key={goal.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '1rem', background: 'rgba(0,0,0,0.02)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                        <div>
+                          <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>{goal.title}</div>
+                          {goal.description && <div className="text-secondary" style={{ fontSize: '0.875rem' }}>{goal.description}</div>}
+                        </div>
+                        <button 
+                          onClick={() => handleDeleteGoal(goal.id)}
+                          style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: '1.2rem' }}
+                        >×</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="glass-panel p-6" style={{ background: 'linear-gradient(135deg, #f5f7fa 0%, #e4e8eb 100%)' }}>
+                <h3 style={{ margin: '0 0 0.5rem 0' }}>💡 Goal Ideas</h3>
+                <p className="text-secondary mb-4" style={{ fontSize: '0.875rem' }}>Click to add any of these common goals:</p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  {[
+                    { title: 'Lose 5kg in 30 days', desc: 'Focus on low-calorie, high-protein meals' },
+                    { title: 'Build muscle', desc: 'High protein diet with complex carbs' },
+                    { title: 'Healthy pregnancy diet', desc: 'Nutrient-rich meals for expecting mothers' },
+                    { title: 'Train for 10K run', desc: 'Endurance-focused nutrition plan' },
+                    { title: 'Reduce sugar intake', desc: 'Cut down on processed sugars' },
+                    { title: 'Heart-healthy eating', desc: 'Low sodium, good fats' },
+                  ].map((preset, i) => (
+                    <button 
+                      key={i}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
+                      onClick={async () => {
+                        try {
+                          await createGoal(preset.title, preset.desc);
+                          const goalsData = await fetchGoals();
+                          setGoals(goalsData || []);
+                        } catch (err) {
+                          alert('Failed to add goal');
+                        }
+                      }}
+                    >
+                      {preset.title}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
           )}
         </section>
       )}
@@ -386,9 +504,37 @@ function App() {
         </div>
       )}
 
+      {showAddGoal && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div className="glass-panel p-6" style={{ width: '400px' }}>
+            <h2 className="mb-4">🎯 Add New Goal</h2>
+            <input
+              type="text"
+              placeholder="Goal title (e.g., Lose 5kg in 30 days)"
+              className="mb-4"
+              style={{ width: '100%', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: '8px' }}
+              value={newGoalTitle}
+              onChange={e => setNewGoalTitle(e.target.value)}
+              autoFocus
+            />
+            <textarea
+              placeholder="Description (optional)"
+              className="mb-4"
+              style={{ width: '100%', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: '8px', minHeight: '80px', resize: 'vertical' }}
+              value={newGoalDescription}
+              onChange={e => setNewGoalDescription(e.target.value)}
+            />
+            <div className="flex-between">
+              <button className="btn btn-secondary" onClick={() => { setShowAddGoal(false); setNewGoalTitle(''); setNewGoalDescription(''); }}>Cancel</button>
+              <button className="btn" onClick={handleAddGoal}>Add Goal</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {mealSuggestions && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div className="glass-panel p-6" style={{ width: '500px', maxHeight: '80vh', overflow: 'auto' }}>
+          <div className="glass-panel p-6" style={{ width: '90%', maxWidth: '900px', maxHeight: '85vh', overflow: 'auto' }}>
             <div className="flex-between mb-4">
               <h2 style={{ margin: 0 }}>✨ Meal Suggestions</h2>
               <button 
@@ -398,9 +544,56 @@ function App() {
                 ×
               </button>
             </div>
-            <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
-              {mealSuggestions}
-            </div>
+            {(() => {
+              try {
+                const data = typeof mealSuggestions === 'string' ? JSON.parse(mealSuggestions) : mealSuggestions;
+                return (
+                  <>
+                    <div style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', padding: '1rem', borderRadius: '8px', marginBottom: '1rem' }}>
+                      <div style={{ fontSize: '0.85rem', opacity: 0.9 }}>🎯 Your Goal</div>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{data.goal}</div>
+                      <div style={{ fontSize: '0.85rem', marginTop: '0.25rem', opacity: 0.9 }}>Suggested {data.meal_type} options</div>
+                    </div>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                      <thead>
+                        <tr style={{ background: 'var(--bg-secondary)', textAlign: 'left' }}>
+                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '15%' }}>Dish</th>
+                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '18%' }}>Ingredients</th>
+                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '30%' }}>How to Make</th>
+                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '8%' }}>Time</th>
+                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '8%' }}>Calories</th>
+                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '8%' }}>Protein</th>
+                          <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', width: '13%' }}>Benefits</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.meals?.map((meal, idx) => (
+                          <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                            <td style={{ padding: '0.75rem', fontWeight: 600, verticalAlign: 'top' }}>{meal.name}</td>
+                            <td style={{ padding: '0.75rem', verticalAlign: 'top' }}>
+                              {Array.isArray(meal.ingredients) ? meal.ingredients.join(', ') : meal.ingredients}
+                            </td>
+                            <td style={{ padding: '0.75rem', verticalAlign: 'top', fontSize: '0.8rem' }}>{meal.instructions}</td>
+                            <td style={{ padding: '0.75rem', verticalAlign: 'top', textAlign: 'center' }}>
+                              <span className="badge">{meal.prep_time}</span>
+                            </td>
+                            <td style={{ padding: '0.75rem', verticalAlign: 'top', textAlign: 'center', fontWeight: 600, color: '#e67e22' }}>{meal.calories}</td>
+                            <td style={{ padding: '0.75rem', verticalAlign: 'top', textAlign: 'center', fontWeight: 600, color: '#27ae60' }}>{meal.protein}</td>
+                            <td style={{ padding: '0.75rem', verticalAlign: 'top', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{meal.benefits}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
+                );
+              } catch (e) {
+                return (
+                  <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+                    {mealSuggestions}
+                  </div>
+                );
+              }
+            })()}
             <div style={{ marginTop: '1.5rem', textAlign: 'right' }}>
               <button className="btn" onClick={() => setMealSuggestions(null)}>Close</button>
             </div>

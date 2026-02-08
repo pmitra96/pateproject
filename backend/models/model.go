@@ -94,3 +94,16 @@ func (p *PantryItem) EffectiveQuantity() float64 {
 	}
 	return p.DerivedQuantity
 }
+
+// Goal represents a health/fitness goal set by a user.
+type Goal struct {
+	ID          uint           `gorm:"primaryKey" json:"id"`
+	UserID      uint           `gorm:"not null;index" json:"user_id"`
+	Title       string         `gorm:"size:255;not null" json:"title"`
+	Description string         `gorm:"type:text" json:"description"`
+	TargetDate  *time.Time     `json:"target_date,omitempty"`
+	IsActive    bool           `gorm:"default:true" json:"is_active"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+}
