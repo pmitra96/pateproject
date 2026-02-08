@@ -35,6 +35,7 @@ function App() {
   const [showAddGoal, setShowAddGoal] = useState(false);
   const [newGoalTitle, setNewGoalTitle] = useState('');
   const [newGoalDescription, setNewGoalDescription] = useState('');
+  const [viewingNutritionItem, setViewingNutritionItem] = useState(null);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -67,6 +68,53 @@ function App() {
       setLoading(false);
     }
   }, [user, activeTab]);
+
+  // SSE: Listen for real-time nutrition updates
+  useEffect(() => {
+    if (!user) return;
+
+    const eventSource = new EventSource('http://localhost:8080/sse/nutrition');
+
+    eventSource.addEventListener('nutrition_update', (event) => {
+      try {
+        const update = JSON.parse(event.data);
+        console.log('Received nutrition update:', update);
+
+        // Update pantry items with new nutrition data
+        setPantry(prev => prev.map(item => {
+          if (item.item.id === update.item_id) {
+            return {
+              ...item,
+              item: {
+                ...item.item,
+                calories: update.calories,
+                protein: update.protein,
+                carbs: update.carbs,
+                fat: update.fat,
+                fiber: update.fiber,
+                nutrition_verified: update.verified
+              }
+            };
+          }
+          return item;
+        }));
+      } catch (err) {
+        console.error('Failed to parse nutrition update:', err);
+      }
+    });
+
+    eventSource.addEventListener('connected', () => {
+      console.log('SSE connected for nutrition updates');
+    });
+
+    eventSource.onerror = (err) => {
+      console.error('SSE error:', err);
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, [user]);
 
   const loadData = async () => {
     setLoading(true);
@@ -297,6 +345,7 @@ function App() {
       <div className="tabs">
         <div className={`tab ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')}>Inventory</div>
         <div className={`tab ${activeTab === 'goals' ? 'active' : ''}`} onClick={() => setActiveTab('goals')}>My Goals</div>
+        <div className={`tab ${activeTab === 'nutrition' ? 'active' : ''}`} onClick={() => setActiveTab('nutrition')}>🔥 Nutrition</div>
         <div className={`tab ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')}>Order History</div>
         <div className={`tab ${activeTab === 'upload' ? 'active' : ''}`} onClick={() => setActiveTab('upload')}>Upload Invoice</div>
       </div>
@@ -429,12 +478,23 @@ function App() {
                               )}
                               {item.item.product_name || item.item.name}
                             </div>
+                            {item.item.calories > 0 && (
+                              <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                                <strong>🔥 {Math.round(item.item.calories)}</strong> {
+                                  ['pc', 'pcs', 'unit', 'units', 'piece', 'pieces', 'pack', 'dozen'].includes(item.item.unit?.toLowerCase())
+                                    ? `kcal/${item.item.unit.toLowerCase()}`
+                                    : `kcal/100${item.item.unit === 'ml' ? 'ml' : 'g'}`
+                                } | P: {item.item.protein?.toFixed(1)}g | C: {item.item.carbs?.toFixed(1)}g | F: {item.item.fat?.toFixed(1)}g
+                                {!item.item.nutrition_verified && <span style={{ fontStyle: 'italic', marginLeft: '0.4rem', opacity: 0.7 }}>(Est.)</span>}
+                              </div>
+                            )}
                           </td>
                           <td style={{ padding: '0.75rem 0', fontWeight: 600, color: isLow ? 'var(--danger)' : 'inherit' }}>
                             {item.effective_quantity}
                           </td>
                           <td style={{ padding: '0.75rem 0' }}><span className="badge">{item.item.unit}</span></td>
                           <td style={{ padding: '0.75rem 0', textAlign: 'right' }}>
+                            <button className="icon-btn" style={{ marginRight: '0.5rem', color: 'var(--accent-color)' }} onClick={() => setViewingNutritionItem(item.item)}>📊</button>
                             <button className="icon-btn" onClick={() => handleEdit(item)}>Update</button>
                             <button className="icon-btn" style={{ marginLeft: '0.5rem', color: 'var(--danger)' }} onClick={() => handleDelete(item)}>Delete</button>
                           </td>
@@ -513,6 +573,57 @@ function App() {
                 </div>
               </div>
             </>
+          )}
+        </section>
+      )}
+
+      {activeTab === 'nutrition' && (
+        <section>
+          {!user ? (
+            <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>Please log in to view nutrition insights.</div>
+          ) : pantry.length === 0 ? (
+            <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>No items in pantry to analyze.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+              {/* Macro Summary Cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem' }}>
+                {[
+                  { label: 'Total Stock Calories', value: pantry.reduce((acc, p) => acc + (p.item.calories * (p.effective_quantity * (p.item.unit === 'g' || p.item.unit === 'ml' ? 1 : 100)) / 100), 0), color: '#ef4444', icon: '🔥', unit: 'kcal' },
+                  { label: 'Protein Potential', value: pantry.reduce((acc, p) => acc + (p.item.protein * (p.effective_quantity * (p.item.unit === 'g' || p.item.unit === 'ml' ? 1 : 100)) / 100), 0), color: '#8b5cf6', icon: '💪', unit: 'g' },
+                  { label: 'Fiber Reserve', value: pantry.reduce((acc, p) => acc + (p.item.fiber * (p.effective_quantity * (p.item.unit === 'g' || p.item.unit === 'ml' ? 1 : 100)) / 100), 0), color: '#10b981', icon: '🥗', unit: 'g' },
+                ].map((stat, i) => (
+                  <div key={i} className="glass-panel p-6" style={{ borderBottom: `4px solid ${stat.color}` }}>
+                    <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>{stat.icon}</div>
+                    <div style={{ fontSize: '1.75rem', fontWeight: 700, color: stat.color }}>{Math.round(stat.value).toLocaleString()}<span style={{ fontSize: '0.9rem', fontWeight: 500, marginLeft: '0.25rem' }}>{stat.unit}</span></div>
+                    <div className="text-secondary" style={{ fontSize: '0.85rem', fontWeight: 500 }}>{stat.label} (total stock)</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Item Macro Leaderboard */}
+              <div className="glass-panel p-6">
+                <h3 className="mb-4">Top Protein Sources</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {[...pantry].sort((a, b) => b.item.protein - a.item.protein).slice(0, 5).map((p, i) => (
+                    <div key={i} className="flex-between p-3" style={{ background: 'rgba(0,0,0,0.02)', borderRadius: '8px' }}>
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{p.item.ingredient?.name || p.item.name}</div>
+                        <div className="text-secondary" style={{ fontSize: '0.75rem' }}>{p.item.brand?.name}</div>
+                      </div>
+                      <div style={{ fontWeight: 700, color: '#8b5cf6' }}>{p.item.protein} g <span style={{ fontSize: '0.7rem', fontWeight: 400, color: 'var(--text-secondary)' }}>/ {['pc', 'pcs', 'unit', 'units', 'piece', 'pieces', 'pack', 'dozen'].includes(p.item.unit?.toLowerCase()) ? p.item.unit.toLowerCase() : `100${p.item.unit === 'ml' ? 'ml' : 'g'}`}</span></div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="glass-panel p-6" style={{ background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)', border: 'none' }}>
+                <h3 style={{ color: '#1e40af', margin: '0 0 0.5rem 0' }}>💡 Health Tip</h3>
+                <p style={{ color: '#1e3a8a', fontSize: '0.9rem', margin: 0 }}>
+                  Based on your pantry, you have a solid supply of <strong>{pantry.reduce((a, b) => a.item.protein > b.item.protein ? a : b).item.ingredient?.name}</strong>.
+                  Try pairing it with complex carbs from your stock to maintain steady energy levels throughout the day!
+                </p>
+              </div>
+            </div>
           )}
         </section>
       )}
@@ -680,6 +791,56 @@ function App() {
               <button className="btn btn-secondary" onClick={() => setShowAddGoal(false)}>Cancel</button>
               <button className="btn" onClick={handleAddGoal}>Save Goal</button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Nutrition Detail Modal */}
+      {viewingNutritionItem && (
+        <div className="modal-overlay" onClick={() => setViewingNutritionItem(null)}>
+          <div className="glass-panel p-8" onClick={e => e.stopPropagation()} style={{ maxWidth: '400px', width: '90%', position: 'relative' }}>
+            <button className="icon-btn" onClick={() => setViewingNutritionItem(null)} style={{ position: 'absolute', right: '1rem', top: '1rem', fontSize: '1.25rem' }}>×</button>
+            <div className="mb-6">
+              <h2 style={{ margin: '0 0 0.25rem 0' }}>{viewingNutritionItem.ingredient?.name || viewingNutritionItem.name}</h2>
+              <div className="text-secondary" style={{ fontSize: '0.9rem' }}>
+                {viewingNutritionItem.brand?.name && <span className="badge" style={{ padding: '0.1rem 0.3rem', marginRight: '0.5rem' }}>{viewingNutritionItem.brand.name}</span>}
+                {viewingNutritionItem.product_name}
+              </div>
+            </div>
+
+            <div style={{ background: 'rgba(0,0,0,0.02)', borderRadius: '12px', padding: '1.5rem', marginBottom: '1.5rem' }}>
+              <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+                <div style={{ fontSize: '2.5rem', fontWeight: 700, lineHeight: 1 }}>{Math.round(viewingNutritionItem.calories)}</div>
+                <div className="text-secondary" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Calories / {['pc', 'pcs', 'unit', 'units', 'piece', 'pieces', 'pack', 'dozen'].includes(viewingNutritionItem.unit?.toLowerCase())
+                    ? viewingNutritionItem.unit.toLowerCase()
+                    : `100${viewingNutritionItem.unit === 'ml' ? 'ml' : 'g'}`}
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                {[
+                  { label: 'Protein', value: viewingNutritionItem.protein, color: '#8b5cf6', suffix: 'g' },
+                  { label: 'Carbs', value: viewingNutritionItem.carbs, color: '#3b82f6', suffix: 'g' },
+                  { label: 'Fats', value: viewingNutritionItem.fat, color: '#f59e0b', suffix: 'g' },
+                  { label: 'Fiber', value: viewingNutritionItem.fiber, color: '#10b981', suffix: 'g' },
+                ].map((macro, i) => (
+                  <div key={i} style={{ padding: '0.75rem', background: 'white', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                    <div className="text-secondary" style={{ fontSize: '0.7rem', marginBottom: '0.2rem' }}>{macro.label}</div>
+                    <div style={{ fontWeight: 600, fontSize: '1.1rem', color: macro.color }}>{macro.value?.toFixed(1)}{macro.suffix}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+              {viewingNutritionItem.nutrition_verified ? (
+                <span style={{ color: '#10b981' }}>● Verified Data</span>
+              ) : (
+                <span style={{ fontStyle: 'italic' }}>● Estimated by AI based on ingredient type</span>
+              )}
+            </div>
+
+            <button className="btn btn-secondary w-full mt-6" onClick={() => setViewingNutritionItem(null)}>Close</button>
           </div>
         </div>
       )}

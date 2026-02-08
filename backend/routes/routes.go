@@ -1,10 +1,14 @@
 package routes
 
 import (
+	"fmt"
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/pmitra96/pateproject/controllers"
+	"github.com/pmitra96/pateproject/jobs"
 	auth "github.com/pmitra96/pateproject/middleware"
 )
 
@@ -56,6 +60,22 @@ func SetupRouter() *chi.Mux {
 
 		// LLM with auth (for personalized suggestions)
 		r.Post("/llm/suggest-meal-personalized", controllers.SuggestMealPersonalized)
+	})
+
+	// Server-Sent Events for real-time nutrition updates
+	r.Get("/sse/nutrition", NutritionSSE)
+
+	// Debug: Manually trigger nutrition job for an item
+	r.Get("/debug/nutrition/{item_id}", func(w http.ResponseWriter, req *http.Request) {
+		itemID := chi.URLParam(req, "item_id")
+		var id uint
+		fmt.Sscanf(itemID, "%d", &id)
+		if id > 0 {
+			jobs.GetWorker().Enqueue(id)
+			w.Write([]byte(fmt.Sprintf(`{"status": "enqueued", "item_id": %d}`, id)))
+		} else {
+			http.Error(w, "Invalid item_id", http.StatusBadRequest)
+		}
 	})
 
 	return r

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pmitra96/pateproject/database"
+	"github.com/pmitra96/pateproject/jobs"
 	"github.com/pmitra96/pateproject/llm"
 	"github.com/pmitra96/pateproject/logger"
 	"github.com/pmitra96/pateproject/models"
@@ -153,6 +154,7 @@ func IngestOrder(w http.ResponseWriter, r *http.Request) {
 	logger.Info("Order created successfully", "order_id", order.ID, "user_id", user.ID)
 
 	llmClient := llm.NewClient()
+	nutritionWorker := jobs.GetWorker()
 
 	// 1. Batch Cache Lookup
 	rawNames := make([]string, 0, len(req.Items))
@@ -232,6 +234,10 @@ func IngestOrder(w http.ResponseWriter, r *http.Request) {
 				ProductName:  productName,
 				Unit:         unit,
 			}
+
+			// Preload ingredient for context
+			newItem.Ingredient = ingredient
+
 			tx.Create(&newItem)
 			itemMap[name] = newItem
 		}
@@ -301,6 +307,13 @@ func IngestOrder(w http.ResponseWriter, r *http.Request) {
 
 	tx.Commit()
 	logger.Info("Order ingested successfully", "order_id", order.ID, "items_count", len(req.Items))
+
+	// Enqueue nutrition jobs AFTER commit so items are visible to the worker
+	for _, name := range missingNames {
+		if item, ok := itemMap[name]; ok {
+			nutritionWorker.Enqueue(item.ID)
+		}
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(`{"status": "created"}`))

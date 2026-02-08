@@ -64,6 +64,14 @@ type Item struct {
 
 	Ingredient Ingredient `gorm:"foreignKey:IngredientID" json:"ingredient,omitempty"`
 	Brand      *Brand     `gorm:"foreignKey:BrandID" json:"brand,omitempty"`
+
+	// Nutritional Info (per 100g or 100ml, or per unit if non-divisible)
+	Calories          float64 `gorm:"default:0" json:"calories"`
+	Protein           float64 `gorm:"default:0" json:"protein"`
+	Carbs             float64 `gorm:"default:0" json:"carbs"`
+	Fat               float64 `gorm:"default:0" json:"fat"`
+	Fiber             float64 `gorm:"default:0" json:"fiber"`
+	NutritionVerified bool    `gorm:"default:false" json:"nutrition_verified"`
 }
 
 // Order represents an ingested grocery order.

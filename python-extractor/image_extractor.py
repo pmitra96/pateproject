@@ -7,6 +7,25 @@ import os
 import sys
 
 
+# ---------- NON-FOOD ITEM FILTER ----------
+NON_FOOD_KEYWORDS = [
+    "wooden", "plate", "spoon", "fork", "knife", "bowl", "container", "box",
+    "bag", "napkin", "tissue", "straw", "cup", "glass", "mug", "utensil",
+    "cutlery", "tray", "basket", "wrapper", "packaging", "lid", "cover",
+    "stand", "holder", "rack", "mat", "coaster", "bottle opener", "corkscrew",
+    "toothpick", "chopstick", "ladle", "spatula", "tong", "peeler", "grater",
+    "sieve", "strainer", "funnel", "measuring", "timer", "thermometer"
+]
+
+def is_non_food_item(name: str) -> bool:
+    """Check if an item name matches non-food keywords."""
+    name_lower = name.lower()
+    for keyword in NON_FOOD_KEYWORDS:
+        if keyword in name_lower:
+            return True
+    return False
+
+
 # ---------- NAME CLEANING ----------
 def clean_name(name: str) -> str:
     return re.sub(r"\s*(?:\([^)]*\)\s*)+$", "", name).strip()
@@ -368,6 +387,9 @@ def parse_raw_text(text: str):
                 })
             i = j
         
+    # Filter out non-food items
+    items = [item for item in items if not is_non_food_item(item["name"])]
+    
     return items
 
 
