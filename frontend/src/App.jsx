@@ -938,8 +938,8 @@ function App() {
               </div>
 
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-                <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9' }}>🔥 {selectedMeal.calories?.toFixed(0)} kcal</span>
-                <span className="badge" style={{ background: '#dcfce7', color: '#15803d' }}>💪 {selectedMeal.protein?.toFixed(1)} protein</span>
+                <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9' }}>🔥 {typeof selectedMeal.calories === 'number' ? selectedMeal.calories.toFixed(0) : selectedMeal.calories} kcal</span>
+                <span className="badge" style={{ background: '#dcfce7', color: '#15803d' }}>💪 {typeof selectedMeal.protein === 'number' ? selectedMeal.protein.toFixed(1) : selectedMeal.protein}g protein</span>
                 {selectedMeal.prep_time && <span className="badge">⏱️ {selectedMeal.prep_time}</span>}
               </div>
 
