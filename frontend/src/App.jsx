@@ -351,8 +351,7 @@ function App() {
       <div className="tabs">
         <div className={`tab ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')}>Inventory</div>
         <div className={`tab ${activeTab === 'goals' ? 'active' : ''}`} onClick={() => setActiveTab('goals')}>My Goals</div>
-        <div className={`tab ${activeTab === 'meals' ? 'active' : ''}`} onClick={() => { setActiveTab('meals'); fetchMealHistory().then(setMealHistory).catch(console.error); }}>🍽️ Meals</div>
-        <div className={`tab ${activeTab === 'nutrition' ? 'active' : ''}`} onClick={() => setActiveTab('nutrition')}>🔥 Nutrition</div>
+        <div className={`tab ${activeTab === 'nutrition' ? 'active' : ''}`} onClick={() => { setActiveTab('nutrition'); fetchMealHistory().then(setMealHistory).catch(console.error); }}>🔥 Nutrition</div>
         <div className={`tab ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')}>Order History</div>
         <div className={`tab ${activeTab === 'upload' ? 'active' : ''}`} onClick={() => setActiveTab('upload')}>Upload Invoice</div>
       </div>
@@ -589,392 +588,445 @@ function App() {
         <section>
           {!user ? (
             <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>Please log in to view nutrition insights.</div>
-          ) : pantry.length === 0 ? (
-            <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>No items in pantry to analyze.</div>
+          ) : mealHistory.length === 0 ? (
+            <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>No meals logged yet to analyze. Log a meal from the suggested recipes!</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-              {/* Macro Summary Cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem' }}>
-                {[
-                  { label: 'Total Stock Calories', value: pantry.reduce((acc, p) => acc + (p.item.calories * (p.effective_quantity * (p.item.unit === 'g' || p.item.unit === 'ml' ? 1 : 100)) / 100), 0), color: '#ef4444', icon: '🔥', unit: 'kcal' },
-                  { label: 'Protein Potential', value: pantry.reduce((acc, p) => acc + (p.item.protein * (p.effective_quantity * (p.item.unit === 'g' || p.item.unit === 'ml' ? 1 : 100)) / 100), 0), color: '#8b5cf6', icon: '💪', unit: 'g' },
-                  { label: 'Fiber Reserve', value: pantry.reduce((acc, p) => acc + (p.item.fiber * (p.effective_quantity * (p.item.unit === 'g' || p.item.unit === 'ml' ? 1 : 100)) / 100), 0), color: '#10b981', icon: '🥗', unit: 'g' },
-                ].map((stat, i) => (
-                  <div key={i} className="glass-panel p-6" style={{ borderBottom: `4px solid ${stat.color}` }}>
-                    <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>{stat.icon}</div>
-                    <div style={{ fontSize: '1.75rem', fontWeight: 700, color: stat.color }}>{Math.round(stat.value).toLocaleString()}<span style={{ fontSize: '0.9rem', fontWeight: 500, marginLeft: '0.25rem' }}>{stat.unit}</span></div>
-                    <div className="text-secondary" style={{ fontSize: '0.85rem', fontWeight: 500 }}>{stat.label} (total stock)</div>
+              {(() => {
+                // Group meals by date
+                const grouped = {};
+                mealHistory.forEach(meal => {
+                  const dateInfo = new Date(meal.logged_at);
+                  const dateKey = dateInfo.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+
+                  if (!grouped[dateKey]) {
+                    grouped[dateKey] = {
+                      date: dateInfo,
+                      meals: [],
+                      totals: { calories: 0, protein: 0, carbs: 0, fat: 0 }
+                    };
+                  }
+
+                  grouped[dateKey].meals.push(meal);
+                  grouped[dateKey].totals.calories += meal.calories || 0;
+                  grouped[dateKey].totals.protein += meal.protein || 0;
+                  grouped[dateKey].totals.carbs += meal.carbs || 0;
+                  grouped[dateKey].totals.fat += meal.fat || 0;
+                });
+
+                // Sort dates descending
+                const sortedDates = Object.keys(grouped).sort((a, b) => grouped[b].date - grouped[a].date);
+
+                return sortedDates.map(dateKey => {
+                  const dayData = grouped[dateKey];
+                  return (
+                    <div key={dateKey}>
+                      <div className="flex-between mb-2">
+                        <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>{dateKey}</h3>
+                        <div className="text-secondary" style={{ fontSize: '0.9rem' }}>
+                          Total: <strong style={{ color: 'var(--accent-color)' }}>{dayData.totals.calories.toFixed(0)} kcal</strong>
+                        </div>
+                      </div>
+
+                      {/* Daily Macro Summary Bar */}
+                      <div className="glass-panel p-4 mb-4" style={{ background: '#f8fafc', border: 'none' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-around', textAlign: 'center' }}>
+                          <div>
+                            <div style={{ fontSize: '1.2rem', fontWeight: 600, color: '#6d28d9' }}>{dayData.totals.protein.toFixed(1)}g</div>
+                            <div className="text-secondary" style={{ fontSize: '0.75rem' }}>Protein</div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '1.2rem', fontWeight: 600, color: '#dc2626' }}>{dayData.totals.carbs.toFixed(1)}g</div>
+                            <div className="text-secondary" style={{ fontSize: '0.75rem' }}>Carbs</div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '1.2rem', fontWeight: 600, color: '#d97706' }}>{dayData.totals.fat.toFixed(1)}g</div>
+                            <div className="text-secondary" style={{ fontSize: '0.75rem' }}>Fat</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid-cols-auto">
+                        {dayData.meals.map(meal => (
+                          <div
+                            key={meal.id}
+                            className="glass-panel p-4"
+                            style={{ position: 'relative', cursor: 'pointer', transition: 'transform 0.2s' }}
+                            onClick={() => setSelectedMeal(meal)}
+                          >
+                            <button
+                              className="icon-btn"
+                              style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', color: 'var(--danger)', zIndex: 10 }}
+                              onClick={async (e) => {
+                                e.stopPropagation(); // Prevent opening modal
+                                if (confirm('Delete this meal and restore ingredients to pantry?')) {
+                                  try {
+                                    await deleteMealLog(meal.id);
+                                    setMealHistory(mealHistory.filter(m => m.id !== meal.id));
+                                    const data = await fetchPantry();
+                                    setPantry(data);
+                                    alert('Meal deleted and pantry restored!');
+                                  } catch (err) {
+                                    console.error('Failed to delete meal', err);
+                                    alert('Failed to delete meal');
+                                  }
+                                }
+                              }}
+                            >
+                              🗑️
+                            </button>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                              {new Date(meal.logged_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </div>
+                            <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem', paddingRight: '1.5rem' }}>{meal.name}</h4>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                              <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9' }}>🔥 {meal.calories?.toFixed(0)}</span>
+                              <span className="badge" style={{ background: '#dcfce7', color: '#15803d' }}>💪 {meal.protein?.toFixed(1)}g</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ height: '1px', background: 'var(--border-color)', margin: '2rem 0' }}></div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          )}
+        </section>
+      )}
+
+      {
+        activeTab === 'history' && (
+          <section>
+            {!user ? (
+              <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>Please log in to view order history.</div>
+            ) : loading ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}><div className="loader"></div></div>
+            ) : orders.length === 0 ? (
+              <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>No orders found.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {orders.map(order => (
+                  <div key={order.id} className="glass-panel p-6">
+                    <div className="flex-between mb-4">
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{order.provider.toUpperCase()} #{order.external_order_id.slice(-6)}</div>
+                        <div className="text-secondary">{new Date(order.order_date).toLocaleDateString()}</div>
+                      </div>
+                      <span className="badge">{order.items?.length || 0} Items</span>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      {order.items?.map((item, i) => (
+                        <div key={i} className="badge" style={{ background: 'transparent', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '0.5rem 0.75rem', borderRadius: '8px' }}>
+                          <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{item.item?.ingredient?.name || item.item?.name || item.raw_name}</div>
+                          {(item.item?.brand?.name || item.item?.product_name) && (
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                              {item.item?.brand?.name} {item.item?.product_name}
+                            </div>
+                          )}
+                          <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', fontWeight: 500 }}>Qty: {item.quantity}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
+            )}
+          </section>
+        )
+      }
 
-              {/* Item Macro Leaderboard */}
+      {
+        activeTab === 'upload' && (
+          <section>
+            {!extractionResult ? (
+              <div className="glass-panel p-6" style={{ textAlign: 'center', border: '2px dashed var(--border-color)', background: 'transparent' }}>
+                <h2 className="mb-2">Invoice Upload</h2>
+                <p className="text-secondary mb-6">Upload receipt to update inventory automatically.</p>
+                <label className="btn" style={{ cursor: 'pointer' }}>
+                  {isExtracting ? <div className="loader" style={{ width: 14, height: 14 }}></div> : "Select File"}
+                  <input type="file" hidden onChange={handleFileUpload} accept=".pdf,.jpg,.png" />
+                </label>
+              </div>
+            ) : (
               <div className="glass-panel p-6">
-                <h3 className="mb-4">Top Protein Sources</h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  {[...pantry].sort((a, b) => b.item.protein - a.item.protein).slice(0, 5).map((p, i) => (
-                    <div key={i} className="flex-between p-3" style={{ background: 'rgba(0,0,0,0.02)', borderRadius: '8px' }}>
-                      <div>
-                        <div style={{ fontWeight: 600 }}>{p.item.ingredient?.name || p.item.name}</div>
-                        <div className="text-secondary" style={{ fontSize: '0.75rem' }}>{p.item.brand?.name}</div>
-                      </div>
-                      <div style={{ fontWeight: 700, color: '#8b5cf6' }}>{p.item.protein} g <span style={{ fontSize: '0.7rem', fontWeight: 400, color: 'var(--text-secondary)' }}>/ {['pc', 'pcs', 'unit', 'units', 'piece', 'pieces', 'pack', 'dozen'].includes(p.item.unit?.toLowerCase()) ? p.item.unit.toLowerCase() : `100${p.item.unit === 'ml' ? 'ml' : 'g'}`}</span></div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="glass-panel p-6" style={{ background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)', border: 'none' }}>
-                <h3 style={{ color: '#1e40af', margin: '0 0 0.5rem 0' }}>💡 Health Tip</h3>
-                <p style={{ color: '#1e3a8a', fontSize: '0.9rem', margin: 0 }}>
-                  Based on your pantry, you have a solid supply of <strong>{pantry.reduce((a, b) => a.item.protein > b.item.protein ? a : b).item.ingredient?.name}</strong>.
-                  Try pairing it with complex carbs from your stock to maintain steady energy levels throughout the day!
-                </p>
-              </div>
-            </div>
-          )}
-        </section>
-      )}
-
-      {activeTab === 'meals' && (
-        <section>
-          <h2 style={{ marginBottom: '1rem' }}>🍽️ Meal History</h2>
-          {!user ? (
-            <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>Please log in to view meal history.</div>
-          ) : mealHistory.length === 0 ? (
-            <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>
-              No meals logged yet. Log a meal from the suggested recipes!
-            </div>
-          ) : (
-            <div className="grid-cols-auto">
-              {mealHistory.map((meal) => (
-                <div key={meal.id} className="glass-panel p-4" style={{ position: 'relative' }}>
-                  <button
-                    className="icon-btn"
-                    style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', color: 'var(--danger)' }}
-                    onClick={async () => {
-                      if (confirm('Delete this meal and restore ingredients to pantry?')) {
-                        try {
-                          await deleteMealLog(meal.id);
-                          setMealHistory(mealHistory.filter(m => m.id !== meal.id));
-                          const data = await fetchPantry();
-                          setPantry(data);
-                          alert('Meal deleted and pantry restored!');
-                        } catch (err) {
-                          console.error('Failed to delete meal', err);
-                          alert('Failed to delete meal');
-                        }
-                      }
-                    }}
-                  >
-                    🗑️
-                  </button>
-                  <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem', paddingRight: '2rem' }}>{meal.name}</h3>
-                  <div className="text-secondary" style={{ fontSize: '0.75rem', marginBottom: '0.75rem' }}>
-                    {new Date(meal.logged_at).toLocaleString()}
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-                    <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9' }}>🔥 {meal.calories?.toFixed(0) || 0} kcal</span>
-                    <span className="badge" style={{ background: '#dcfce7', color: '#15803d' }}>💪 {meal.protein?.toFixed(1) || 0}g protein</span>
-                    <span className="badge" style={{ background: '#fee2e2', color: '#dc2626' }}>🍞 {meal.carbs?.toFixed(1) || 0}g carbs</span>
-                    <span className="badge" style={{ background: '#fef3c7', color: '#d97706' }}>🧈 {meal.fat?.toFixed(1) || 0}g fat</span>
-                  </div>
-                  <details style={{ fontSize: '0.8rem' }}>
-                    <summary className="text-secondary" style={{ cursor: 'pointer' }}>View Ingredients</summary>
-                    <ul style={{ margin: '0.5rem 0 0 0', paddingLeft: '1.2rem' }}>
-                      {JSON.parse(meal.ingredients || '[]').map((ing, i) => (
-                        <li key={i} className="text-secondary">{ing}</li>
-                      ))}
-                    </ul>
-                  </details>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-
-      {activeTab === 'history' && (
-        <section>
-          {!user ? (
-            <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>Please log in to view order history.</div>
-          ) : loading ? (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}><div className="loader"></div></div>
-          ) : orders.length === 0 ? (
-            <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>No orders found.</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {orders.map(order => (
-                <div key={order.id} className="glass-panel p-6">
-                  <div className="flex-between mb-4">
-                    <div>
-                      <div style={{ fontWeight: 600 }}>{order.provider.toUpperCase()} #{order.external_order_id.slice(-6)}</div>
-                      <div className="text-secondary">{new Date(order.order_date).toLocaleDateString()}</div>
-                    </div>
-                    <span className="badge">{order.items?.length || 0} Items</span>
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    {order.items?.map((item, i) => (
-                      <div key={i} className="badge" style={{ background: 'transparent', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '0.5rem 0.75rem', borderRadius: '8px' }}>
-                        <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{item.item?.ingredient?.name || item.item?.name || item.raw_name}</div>
-                        {(item.item?.brand?.name || item.item?.product_name) && (
-                          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                            {item.item?.brand?.name} {item.item?.product_name}
-                          </div>
-                        )}
-                        <div style={{ fontSize: '0.75rem', marginTop: '0.25rem', fontWeight: 500 }}>Qty: {item.quantity}</div>
-                      </div>
-                    ))}
+                <div className="flex-between mb-6">
+                  <h2 style={{ margin: 0 }}>Review {extractionResult.provider} Items</h2>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button className="btn btn-secondary" onClick={() => setExtractionResult(null)}>Cancel</button>
+                    <button className="btn" onClick={handleConfirmIngest}>Confirm</button>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-
-      {activeTab === 'upload' && (
-        <section>
-          {!extractionResult ? (
-            <div className="glass-panel p-6" style={{ textAlign: 'center', border: '2px dashed var(--border-color)', background: 'transparent' }}>
-              <h2 className="mb-2">Invoice Upload</h2>
-              <p className="text-secondary mb-6">Upload receipt to update inventory automatically.</p>
-              <label className="btn" style={{ cursor: 'pointer' }}>
-                {isExtracting ? <div className="loader" style={{ width: 14, height: 14 }}></div> : "Select File"}
-                <input type="file" hidden onChange={handleFileUpload} accept=".pdf,.jpg,.png" />
-              </label>
-            </div>
-          ) : (
-            <div className="glass-panel p-6">
-              <div className="flex-between mb-6">
-                <h2 style={{ margin: 0 }}>Review {extractionResult.provider} Items</h2>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button className="btn btn-secondary" onClick={() => setExtractionResult(null)}>Cancel</button>
-                  <button className="btn" onClick={handleConfirmIngest}>Confirm</button>
-                </div>
-              </div>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-secondary)' }}>
-                    <th style={{ padding: '0.5rem 0' }}>Name</th>
-                    <th style={{ padding: '0.5rem 0' }}>Qty</th>
-                    <th style={{ padding: '0.5rem 0' }}>Size</th>
-                    <th style={{ padding: '0.5rem 0' }}>Unit</th>
-                    <th style={{ padding: '0.5rem 0' }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {extractionResult.items.map((item, idx) => (
-                    <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                      <td style={{ padding: '0.5rem 0' }}>
-                        {/* {console.log(extractionResult)} */}
-                        <input style={{ background: 'transparent', border: 'none', width: '100%' }} value={item.name} onChange={e => { const n = { ...extractionResult }; n.items[idx].name = e.target.value; setExtractionResult(n); }} />
-                      </td>
-                      <td style={{ padding: '0.5rem 0' }}><input type="number" style={{ background: 'transparent', border: 'none', width: '40px' }} value={item.count} onChange={e => { const n = { ...extractionResult }; n.items[idx].count = parseFloat(e.target.value); setExtractionResult(n); }} /></td>
-                      <td style={{ padding: '0.5rem 0' }}><input type="number" style={{ background: 'transparent', border: 'none', width: '40px' }} value={item.unit_value} onChange={e => { const n = { ...extractionResult }; n.items[idx].unit_value = parseFloat(e.target.value); setExtractionResult(n); }} /></td>
-                      <td style={{ padding: '0.5rem 0' }}><input style={{ background: 'transparent', border: 'none', width: '40px' }} value={item.unit} onChange={e => { const n = { ...extractionResult }; n.items[idx].unit = e.target.value; setExtractionResult(n); }} /></td>
-                      <td style={{ textAlign: 'right' }}><button style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer' }} onClick={() => { const n = { ...extractionResult }; n.items = n.items.filter((_, i) => i !== idx); setExtractionResult(n); }}>✕</button></td>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-secondary)' }}>
+                      <th style={{ padding: '0.5rem 0' }}>Name</th>
+                      <th style={{ padding: '0.5rem 0' }}>Qty</th>
+                      <th style={{ padding: '0.5rem 0' }}>Size</th>
+                      <th style={{ padding: '0.5rem 0' }}>Unit</th>
+                      <th style={{ padding: '0.5rem 0' }}></th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      )}
+                  </thead>
+                  <tbody>
+                    {extractionResult.items.map((item, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                        <td style={{ padding: '0.5rem 0' }}>
+                          {/* {console.log(extractionResult)} */}
+                          <input style={{ background: 'transparent', border: 'none', width: '100%' }} value={item.name} onChange={e => { const n = { ...extractionResult }; n.items[idx].name = e.target.value; setExtractionResult(n); }} />
+                        </td>
+                        <td style={{ padding: '0.5rem 0' }}><input type="number" style={{ background: 'transparent', border: 'none', width: '40px' }} value={item.count} onChange={e => { const n = { ...extractionResult }; n.items[idx].count = parseFloat(e.target.value); setExtractionResult(n); }} /></td>
+                        <td style={{ padding: '0.5rem 0' }}><input type="number" style={{ background: 'transparent', border: 'none', width: '40px' }} value={item.unit_value} onChange={e => { const n = { ...extractionResult }; n.items[idx].unit_value = parseFloat(e.target.value); setExtractionResult(n); }} /></td>
+                        <td style={{ padding: '0.5rem 0' }}><input style={{ background: 'transparent', border: 'none', width: '40px' }} value={item.unit} onChange={e => { const n = { ...extractionResult }; n.items[idx].unit = e.target.value; setExtractionResult(n); }} /></td>
+                        <td style={{ textAlign: 'right' }}><button style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer' }} onClick={() => { const n = { ...extractionResult }; n.items = n.items.filter((_, i) => i !== idx); setExtractionResult(n); }}>✕</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )
+      }
 
-      {editingId && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div className="glass-panel p-6" style={{ width: '280px' }}>
-            <h2 className="mb-4">Update Stock</h2>
-            <input
-              type="number"
-              className="mb-4"
-              style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px' }}
-              value={editValue}
-              onChange={e => setEditValue(e.target.value)}
-              autoFocus
-            />
-            <div className="flex-between">
-              <button className="btn btn-secondary" onClick={() => setEditingId(null)}>Cancel</button>
-              <button className="btn" onClick={() => handleSave(editingId)}>Update</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {deletingItem && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div className="glass-panel p-6" style={{ width: '320px' }}>
-            <h2 className="mb-4">Delete Item</h2>
-            <p className="text-secondary mb-6">Are you sure you want to delete <strong>{deletingItem.item.name}</strong> from your pantry?</p>
-            <div className="flex-between">
-              <button className="btn btn-secondary" onClick={() => setDeletingItem(null)}>Cancel</button>
-              <button className="btn" style={{ background: 'var(--danger)' }} onClick={handleConfirmDelete}>Delete</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showBulkDeleteConfirm && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div className="glass-panel p-6" style={{ width: '320px' }}>
-            <h2 className="mb-4">Delete Multiple Items</h2>
-            <p className="text-secondary mb-6">Are you sure you want to delete <strong>{selectedIds.size}</strong> selected items from your pantry?</p>
-            <div className="flex-between">
-              <button className="btn btn-secondary" onClick={() => setShowBulkDeleteConfirm(false)}>Cancel</button>
-              <button className="btn" style={{ background: 'var(--danger)' }} onClick={handleConfirmBulkDelete}>Delete All</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showAddGoal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div className="glass-panel p-6" style={{ width: '400px' }}>
-            <h2 className="mb-4">🎯 Add Health Goal</h2>
-            <div className="mb-4">
-              <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.25rem' }}>Goal Title</label>
+      {
+        editingId && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+            <div className="glass-panel p-6" style={{ width: '280px' }}>
+              <h2 className="mb-4">Update Stock</h2>
               <input
-                type="text"
-                placeholder="e.g. Lose 5kg, Build Muscle"
+                type="number"
+                className="mb-4"
                 style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px' }}
-                value={newGoalTitle}
-                onChange={e => setNewGoalTitle(e.target.value)}
+                value={editValue}
+                onChange={e => setEditValue(e.target.value)}
                 autoFocus
               />
-            </div>
-            <div className="mb-6">
-              <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.25rem' }}>Description (optional)</label>
-              <textarea
-                placeholder="Give more context to the AI..."
-                style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px', minHeight: '80px', fontFamily: 'inherit' }}
-                value={newGoalDescription}
-                onChange={e => setNewGoalDescription(e.target.value)}
-              />
-            </div>
-            <div className="flex-between">
-              <button className="btn btn-secondary" onClick={() => setShowAddGoal(false)}>Cancel</button>
-              <button className="btn" onClick={handleAddGoal}>Save Goal</button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* Nutrition Detail Modal */}
-      {viewingNutritionItem && (
-        <div className="modal-overlay" onClick={() => setViewingNutritionItem(null)}>
-          <div className="glass-panel p-8" onClick={e => e.stopPropagation()} style={{ maxWidth: '400px', width: '90%', position: 'relative' }}>
-            <button className="icon-btn" onClick={() => setViewingNutritionItem(null)} style={{ position: 'absolute', right: '1rem', top: '1rem', fontSize: '1.25rem' }}>×</button>
-            <div className="mb-6">
-              <h2 style={{ margin: '0 0 0.25rem 0' }}>{viewingNutritionItem.ingredient?.name || viewingNutritionItem.name}</h2>
-              <div className="text-secondary" style={{ fontSize: '0.9rem' }}>
-                {viewingNutritionItem.brand?.name && <span className="badge" style={{ padding: '0.1rem 0.3rem', marginRight: '0.5rem' }}>{viewingNutritionItem.brand.name}</span>}
-                {viewingNutritionItem.product_name}
+              <div className="flex-between">
+                <button className="btn btn-secondary" onClick={() => setEditingId(null)}>Cancel</button>
+                <button className="btn" onClick={() => handleSave(editingId)}>Update</button>
               </div>
             </div>
+          </div>
+        )
+      }
 
-            <div style={{ background: 'rgba(0,0,0,0.02)', borderRadius: '12px', padding: '1.5rem', marginBottom: '1.5rem' }}>
-              <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-                <div style={{ fontSize: '2.5rem', fontWeight: 700, lineHeight: 1 }}>{Math.round(viewingNutritionItem.calories)}</div>
-                <div className="text-secondary" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  Calories / {['pc', 'pcs', 'unit', 'units', 'piece', 'pieces', 'pack', 'dozen'].includes(viewingNutritionItem.unit?.toLowerCase())
-                    ? viewingNutritionItem.unit.toLowerCase()
-                    : `100${viewingNutritionItem.unit === 'ml' ? 'ml' : 'g'}`}
+      {
+        deletingItem && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+            <div className="glass-panel p-6" style={{ width: '320px' }}>
+              <h2 className="mb-4">Delete Item</h2>
+              <p className="text-secondary mb-6">Are you sure you want to delete <strong>{deletingItem.item.name}</strong> from your pantry?</p>
+              <div className="flex-between">
+                <button className="btn btn-secondary" onClick={() => setDeletingItem(null)}>Cancel</button>
+                <button className="btn" style={{ background: 'var(--danger)' }} onClick={handleConfirmDelete}>Delete</button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        showBulkDeleteConfirm && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+            <div className="glass-panel p-6" style={{ width: '320px' }}>
+              <h2 className="mb-4">Delete Multiple Items</h2>
+              <p className="text-secondary mb-6">Are you sure you want to delete <strong>{selectedIds.size}</strong> selected items from your pantry?</p>
+              <div className="flex-between">
+                <button className="btn btn-secondary" onClick={() => setShowBulkDeleteConfirm(false)}>Cancel</button>
+                <button className="btn" style={{ background: 'var(--danger)' }} onClick={handleConfirmBulkDelete}>Delete All</button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        showAddGoal && (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+            <div className="glass-panel p-6" style={{ width: '400px' }}>
+              <h2 className="mb-4">🎯 Add Health Goal</h2>
+              <div className="mb-4">
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.25rem' }}>Goal Title</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Lose 5kg, Build Muscle"
+                  style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px' }}
+                  value={newGoalTitle}
+                  onChange={e => setNewGoalTitle(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div className="mb-6">
+                <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.25rem' }}>Description (optional)</label>
+                <textarea
+                  placeholder="Give more context to the AI..."
+                  style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px', minHeight: '80px', fontFamily: 'inherit' }}
+                  value={newGoalDescription}
+                  onChange={e => setNewGoalDescription(e.target.value)}
+                />
+              </div>
+              <div className="flex-between">
+                <button className="btn btn-secondary" onClick={() => setShowAddGoal(false)}>Cancel</button>
+                <button className="btn" onClick={handleAddGoal}>Save Goal</button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+      {/* Nutrition Detail Modal */}
+      {
+        viewingNutritionItem && (
+          <div className="modal-overlay" onClick={() => setViewingNutritionItem(null)}>
+            <div className="glass-panel p-8" onClick={e => e.stopPropagation()} style={{ maxWidth: '400px', width: '90%', position: 'relative' }}>
+              <button className="icon-btn" onClick={() => setViewingNutritionItem(null)} style={{ position: 'absolute', right: '1rem', top: '1rem', fontSize: '1.25rem' }}>×</button>
+              <div className="mb-6">
+                <h2 style={{ margin: '0 0 0.25rem 0' }}>{viewingNutritionItem.ingredient?.name || viewingNutritionItem.name}</h2>
+                <div className="text-secondary" style={{ fontSize: '0.9rem' }}>
+                  {viewingNutritionItem.brand?.name && <span className="badge" style={{ padding: '0.1rem 0.3rem', marginRight: '0.5rem' }}>{viewingNutritionItem.brand.name}</span>}
+                  {viewingNutritionItem.product_name}
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                {[
-                  { label: 'Protein', value: viewingNutritionItem.protein, color: '#8b5cf6', suffix: 'g' },
-                  { label: 'Carbs', value: viewingNutritionItem.carbs, color: '#3b82f6', suffix: 'g' },
-                  { label: 'Fats', value: viewingNutritionItem.fat, color: '#f59e0b', suffix: 'g' },
-                  { label: 'Fiber', value: viewingNutritionItem.fiber, color: '#10b981', suffix: 'g' },
-                ].map((macro, i) => (
-                  <div key={i} style={{ padding: '0.75rem', background: 'white', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                    <div className="text-secondary" style={{ fontSize: '0.7rem', marginBottom: '0.2rem' }}>{macro.label}</div>
-                    <div style={{ fontWeight: 600, fontSize: '1.1rem', color: macro.color }}>{macro.value?.toFixed(1)}{macro.suffix}</div>
+              <div style={{ background: 'rgba(0,0,0,0.02)', borderRadius: '12px', padding: '1.5rem', marginBottom: '1.5rem' }}>
+                <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+                  <div style={{ fontSize: '2.5rem', fontWeight: 700, lineHeight: 1 }}>{Math.round(viewingNutritionItem.calories)}</div>
+                  <div className="text-secondary" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Calories / {['pc', 'pcs', 'unit', 'units', 'piece', 'pieces', 'pack', 'dozen'].includes(viewingNutritionItem.unit?.toLowerCase())
+                      ? viewingNutritionItem.unit.toLowerCase()
+                      : `100${viewingNutritionItem.unit === 'ml' ? 'ml' : 'g'}`}
                   </div>
-                ))}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  {[
+                    { label: 'Protein', value: viewingNutritionItem.protein, color: '#8b5cf6', suffix: 'g' },
+                    { label: 'Carbs', value: viewingNutritionItem.carbs, color: '#3b82f6', suffix: 'g' },
+                    { label: 'Fats', value: viewingNutritionItem.fat, color: '#f59e0b', suffix: 'g' },
+                    { label: 'Fiber', value: viewingNutritionItem.fiber, color: '#10b981', suffix: 'g' },
+                  ].map((macro, i) => (
+                    <div key={i} style={{ padding: '0.75rem', background: 'white', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                      <div className="text-secondary" style={{ fontSize: '0.7rem', marginBottom: '0.2rem' }}>{macro.label}</div>
+                      <div style={{ fontWeight: 600, fontSize: '1.1rem', color: macro.color }}>{macro.value?.toFixed(1)}{macro.suffix}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
 
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
-              {viewingNutritionItem.nutrition_verified ? (
-                <span style={{ color: '#10b981' }}>● Verified Data</span>
-              ) : (
-                <span style={{ fontStyle: 'italic' }}>● Estimated by AI based on ingredient type</span>
-              )}
-            </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                {viewingNutritionItem.nutrition_verified ? (
+                  <span style={{ color: '#10b981' }}>● Verified Data</span>
+                ) : (
+                  <span style={{ fontStyle: 'italic' }}>● Estimated by AI based on ingredient type</span>
+                )}
+              </div>
 
-            <button className="btn btn-secondary w-full mt-6" onClick={() => setViewingNutritionItem(null)}>Close</button>
+              <button className="btn btn-secondary w-full mt-6" onClick={() => setViewingNutritionItem(null)}>Close</button>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Meal Detail Modal */}
-      {selectedMeal && (
-        <div className="modal-overlay" onClick={() => setSelectedMeal(null)}>
-          <div className="modal glass-panel p-6" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
-            <div className="flex-between mb-4">
-              <h2 style={{ margin: 0 }}>{selectedMeal.name}</h2>
-              <button className="icon-btn" onClick={() => setSelectedMeal(null)}>✕</button>
-            </div>
+      {
+        selectedMeal && (
+          <div className="modal-overlay" onClick={() => setSelectedMeal(null)}>
+            <div className="modal glass-panel p-6" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+              <div className="flex-between mb-4">
+                <h2 style={{ margin: 0 }}>{selectedMeal.name}</h2>
+                <button className="icon-btn" onClick={() => setSelectedMeal(null)}>✕</button>
+              </div>
 
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-              <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9' }}>🔥 {selectedMeal.calories} kcal</span>
-              <span className="badge" style={{ background: '#dcfce7', color: '#15803d' }}>💪 {selectedMeal.protein} protein</span>
-              <span className="badge">⏱️ {selectedMeal.prep_time}</span>
-            </div>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+                <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9' }}>🔥 {selectedMeal.calories?.toFixed(0)} kcal</span>
+                <span className="badge" style={{ background: '#dcfce7', color: '#15803d' }}>💪 {selectedMeal.protein?.toFixed(1)} protein</span>
+                {selectedMeal.prep_time && <span className="badge">⏱️ {selectedMeal.prep_time}</span>}
+              </div>
 
-            <div style={{ marginBottom: '1rem' }}>
-              <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-color)' }}>Benefits</div>
-              <div className="text-secondary">{selectedMeal.benefits}</div>
-            </div>
+              {selectedMeal.benefits && (
+                <div style={{ marginBottom: '1rem' }}>
+                  <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-color)' }}>Benefits</div>
+                  <div className="text-secondary">{selectedMeal.benefits}</div>
+                </div>
+              )}
 
-            <div style={{ marginBottom: '1rem' }}>
-              <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-color)' }}>Ingredients</div>
-              <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
-                {selectedMeal.ingredients.map((ing, i) => (
-                  <li key={i} className="text-secondary" style={{ marginBottom: '0.25rem' }}>{ing}</li>
-                ))}
-              </ul>
-            </div>
+              <div style={{ marginBottom: '1rem' }}>
+                <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-color)' }}>Ingredients</div>
+                <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+                  {(() => {
+                    const ings = typeof selectedMeal.ingredients === 'string'
+                      ? JSON.parse(selectedMeal.ingredients || '[]')
+                      : selectedMeal.ingredients || [];
+                    return ings.map((ing, i) => (
+                      <li key={i} className="text-secondary" style={{ marginBottom: '0.25rem' }}>{ing}</li>
+                    ));
+                  })()}
+                </ul>
+              </div>
 
-            <div style={{ marginBottom: '1.5rem' }}>
-              <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-color)' }}>Instructions</div>
-              <div className="text-secondary">{selectedMeal.instructions}</div>
-            </div>
+              {selectedMeal.instructions && (
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-color)' }}>Instructions</div>
+                  <div className="text-secondary">{selectedMeal.instructions}</div>
+                </div>
+              )}
 
-            <button
-              className="btn w-full"
-              style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', padding: '1rem' }}
-              disabled={isLoggingMeal}
-              onClick={async () => {
-                setIsLoggingMeal(true);
-                try {
-                  const result = await logMeal(selectedMeal);
-                  alert(`✅ Meal logged! Updated: ${result.updated_items?.join(', ') || 'No pantry items matched'}`);
-                  setSelectedMeal(null);
-                  // Refresh pantry to show updated quantities
-                  const data = await fetchPantry();
-                  setPantry(data);
-                } catch (err) {
-                  console.error('Failed to log meal', err);
-                  alert('Failed to log meal: ' + err.message);
-                } finally {
-                  setIsLoggingMeal(false);
-                }
-              }}
-            >
-              {isLoggingMeal ? '⏳ Logging...' : '📋 Log This Meal'}
-            </button>
-            <div className="text-secondary" style={{ fontSize: '0.75rem', textAlign: 'center', marginTop: '0.5rem' }}>
-              This will reduce your pantry quantities based on the ingredients used.
+              {/* Allow re-logging historical meals */}
+              <button
+                className="btn w-full"
+                style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', padding: '1rem' }}
+                disabled={isLoggingMeal}
+                onClick={async () => {
+                  setIsLoggingMeal(true);
+                  try {
+                    // Create a clean meal object to log (remove ID if it's history, so new log is created)
+                    // The backend creates a new log anyway based on passed data.
+                    const mealToLog = { ...selectedMeal };
+                    if (mealToLog.logged_at) {
+                      delete mealToLog.id; // Ensure new ID is generated
+                      delete mealToLog.logged_at;
+                    }
+
+                    if (typeof mealToLog.ingredients === 'string') {
+                      try {
+                        mealToLog.ingredients = JSON.parse(mealToLog.ingredients);
+                      } catch (e) {
+                        mealToLog.ingredients = [];
+                      }
+                    }
+
+                    const result = await logMeal(mealToLog);
+                    alert(`✅ Meal logged! Updated: ${result.updated_items?.join(', ') || 'No pantry items matched'}`);
+                    setSelectedMeal(null);
+                    // Refresh pantry to show updated quantities
+                    const data = await fetchPantry();
+                    setPantry(data);
+                    // Refresh history
+                    if (activeTab === 'nutrition') {
+                      const history = await fetchMealHistory();
+                      setMealHistory(history);
+                    }
+                  } catch (err) {
+                    console.error('Failed to log meal', err);
+                    alert('Failed to log meal: ' + err.message);
+                  } finally {
+                    setIsLoggingMeal(false);
+                  }
+                }}
+              >
+                {isLoggingMeal ? '⏳ Logging...' : (selectedMeal.logged_at ? '📋 Log As New Meal' : '📋 Log This Meal')}
+              </button>
+
+              {selectedMeal.logged_at && (
+                <div className="text-secondary" style={{ fontSize: '0.8rem', textAlign: 'center', marginTop: '1rem', fontStyle: 'italic' }}>
+                  Originally logged on {new Date(selectedMeal.logged_at).toLocaleString()}
+                </div>
+              )}
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+    </div >
   );
 }
 

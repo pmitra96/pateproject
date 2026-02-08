@@ -16,8 +16,8 @@ import (
 type LogMealRequest struct {
 	Name        string   `json:"name"`
 	Ingredients []string `json:"ingredients"`
-	Calories    string   `json:"calories"`
-	Protein     string   `json:"protein"`
+	Calories    float64  `json:"calories"`
+	Protein     float64  `json:"protein"`
 }
 
 type LogMealResponse struct {
