@@ -286,7 +286,7 @@ func (c *Client) SuggestMeals(inventory []InventoryItem) (string, error) {
 
 %s
 
-Suggest 3 meals I can make. 
+Suggest 3 meals I can make.
 
 IMPORTANT RULES:
 1. Portions MUST be for exactly 1 person (one serving).
@@ -358,6 +358,12 @@ func (c *Client) SuggestMealsPersonalized(inventory []InventoryItem, goals []Goa
 
 Suggest 3 %s options that align with my goals.
 
+IMPORTANT QUALITY GUIDELINES - Self-evaluate before responding:
+- Use AUTHENTIC dish names (real recipes, not generic names like "Vegetable Stir Fry")
+- Ensure cooking instructions are REALISTIC and detailed
+- Calorie estimates must be ACCURATE for portion sizes
+- Protein values must match the actual ingredients used
+
 IMPORTANT RULES:
 1. All meal portions MUST be calculated for EXACTLY 1 serving (for one person).
 2. Each ingredient in the "ingredients" list must include a specific weight/quantity (e.g., "150g Chicken breast", "2 Eggs", "1 cup Rice").
@@ -366,6 +372,7 @@ IMPORTANT: Return ONLY valid JSON in this exact format, no other text:
 {
   "goal": "%s",
   "meal_type": "%s",
+  "confidence": 8,
   "meals": [
     {
       "name": "Dish Name",
@@ -377,74 +384,54 @@ IMPORTANT: Return ONLY valid JSON in this exact format, no other text:
       "benefits": "How this helps achieve the goal"
     }
   ]
-}`, items, goalsText, mealType, goalsSummary, mealType)
+}
+
+Set "confidence" (1-10) based on how well you followed the quality guidelines.`, items, goalsText, mealType, goalsSummary, mealType)
 
 	messages := []Message{
-		{Role: "system", Content: "You are a nutritionist. Return ONLY valid JSON, no markdown, no explanation. Follow the exact JSON structure requested."},
+		{Role: "system", Content: "You are an expert nutritionist and chef. Suggest authentic, well-researched meals. Self-evaluate your response quality. Return ONLY valid JSON."},
 		{Role: "user", Content: prompt},
 	}
 
-	// Step 1: Generate initial suggestions
+	// Log the prompt being sent
+	fmt.Println("\n========== LLM PROMPT ==========")
+	fmt.Println("SYSTEM:", messages[0].Content)
+	fmt.Println("\nUSER:", messages[1].Content)
+	fmt.Println("================================\n")
+
+	// Step 1: Generate with self-evaluation
 	initialResponse, err := c.Chat(messages)
 	if err != nil {
 		return "", err
 	}
 
-	// Step 2: Judge the response
-	judgePrompt := fmt.Sprintf(`You are a nutrition expert and food critic. Evaluate this meal suggestion for someone with the goal: "%s"
-
-Meal suggestions:
-%s
-
-Judge each meal on:
-1. **Authenticity**: Are these real, properly named dishes? Are cooking instructions realistic?
-2. **Goal alignment**: Do calories/protein match the stated goal?
-3. **Serving Size**: Is the meal strictly for EXACTLY 1 serving (one person)?
-4. **Ingredient Detail**: Does every ingredient include a specific weight or quantity (e.g., "100g", "2 units")?
-5. **Nutritional accuracy**: Are calorie/protein estimates reasonable for the given quantities?
-
-Return ONLY valid JSON:
-{
-  "issues": [
-    {"meal": "dish name", "problem": "specific issue", "suggestion": "how to fix"}
-  ],
-  "overall_score": 8,
-  "needs_refinement": true
-}`, goalsSummary, initialResponse)
-
-	judgeMessages := []Message{
-		{Role: "system", Content: "You are a strict nutrition and culinary expert. Evaluate meal suggestions critically. Return ONLY valid JSON. Focus on serving size (1 person) and ingredient weights."},
-		{Role: "user", Content: judgePrompt},
-	}
-
-	judgeResponse, err := c.Chat(judgeMessages)
-	if err != nil {
-		// If judge fails, return initial response
+	// Step 2: Check confidence - only refine if low confidence (<7)
+	if !strings.Contains(initialResponse, `"confidence"`) ||
+	   strings.Contains(initialResponse, `"confidence": 9`) ||
+	   strings.Contains(initialResponse, `"confidence": 10`) ||
+	   strings.Contains(initialResponse, `"confidence": 8`) ||
+	   strings.Contains(initialResponse, `"confidence": 7`) {
+		// High confidence, return as-is
 		return initialResponse, nil
 	}
 
-	// Check if refinement needed
-	if !strings.Contains(judgeResponse, `"needs_refinement": true`) {
-		return initialResponse, nil
-	}
+	// Low confidence - run judge and refine
+	refinePrompt := fmt.Sprintf(`The following meal suggestions have low confidence. Improve them.
 
-	// Step 3: Refine based on judge feedback
-	refinePrompt := fmt.Sprintf(`Based on this expert feedback, improve the meal suggestions.
-
-Original suggestions:
+Original:
 %s
 
-Expert feedback:
-%s
+Requirements:
+- Use AUTHENTIC dish names from real cuisines
+- Detailed, realistic cooking instructions
+- Accurate calorie/protein for the portions
+- Clear goal alignment
 
-CRITICAL RULES TO FIX:
-1. Every meal MUST be for exactly 1 serving.
-2. Every ingredient MUST have a weight/quantity (e.g. "100g Paneer").
-
-Fix ALL issues mentioned. Return the improved suggestions in the SAME JSON format:
+Return improved JSON in same format with confidence 8+:
 {
   "goal": "%s",
   "meal_type": "%s",
+  "confidence": 9,
   "meals": [
     {
       "name": "Dish Name",
@@ -458,10 +445,10 @@ Fix ALL issues mentioned. Return the improved suggestions in the SAME JSON forma
   ]
 }
 
-Make dishes more authentic with proper names, realistic cooking times, and accurate nutritional info and serving sizes.`, initialResponse, judgeResponse, goalsSummary, mealType)
+Make dishes more authentic with proper names, realistic cooking times, and accurate nutritional info and serving sizes.`, initialResponse, goalsSummary, mealType)
 
 	refineMessages := []Message{
-		{Role: "system", Content: "You are an expert chef and nutritionist. Improve meal suggestions based on feedback. Return ONLY valid JSON."},
+		{Role: "system", Content: "You are an expert chef. Improve low-quality meal suggestions to be authentic and accurate. Return ONLY valid JSON."},
 		{Role: "user", Content: refinePrompt},
 	}
 
