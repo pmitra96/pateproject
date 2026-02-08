@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/pmitra96/pateproject/config"
@@ -232,5 +233,86 @@ IMPORTANT: Return ONLY valid JSON in this exact format, no other text:
 		{Role: "user", Content: prompt},
 	}
 
-	return c.Chat(messages)
+	// Step 1: Generate initial suggestions
+	initialResponse, err := c.Chat(messages)
+	if err != nil {
+		return "", err
+	}
+
+	// Step 2: Judge the response
+	judgePrompt := fmt.Sprintf(`You are a nutrition expert and food critic. Evaluate this meal suggestion for someone with the goal: "%s"
+
+Meal suggestions:
+%s
+
+Judge each meal on:
+1. **Authenticity**: Are these real, properly named dishes? Are cooking instructions realistic?
+2. **Goal alignment**: Do calories/protein match the stated goal?
+3. **Ingredient accuracy**: Are the ingredients properly used?
+4. **Nutritional accuracy**: Are calorie/protein estimates reasonable?
+
+Return ONLY valid JSON:
+{
+  "issues": [
+    {"meal": "dish name", "problem": "specific issue", "suggestion": "how to fix"}
+  ],
+  "overall_score": 8,
+  "needs_refinement": true
+}`, goalsSummary, initialResponse)
+
+	judgeMessages := []Message{
+		{Role: "system", Content: "You are a strict nutrition and culinary expert. Evaluate meal suggestions critically. Return ONLY valid JSON."},
+		{Role: "user", Content: judgePrompt},
+	}
+
+	judgeResponse, err := c.Chat(judgeMessages)
+	if err != nil {
+		// If judge fails, return initial response
+		return initialResponse, nil
+	}
+
+	// Check if refinement needed
+	if !strings.Contains(judgeResponse, `"needs_refinement": true`) {
+		return initialResponse, nil
+	}
+
+	// Step 3: Refine based on judge feedback
+	refinePrompt := fmt.Sprintf(`Based on this expert feedback, improve the meal suggestions.
+
+Original suggestions:
+%s
+
+Expert feedback:
+%s
+
+Fix ALL issues mentioned. Return the improved suggestions in the SAME JSON format:
+{
+  "goal": "%s",
+  "meal_type": "%s",
+  "meals": [
+    {
+      "name": "Dish Name",
+      "ingredients": ["ingredient 1", "ingredient 2"],
+      "instructions": "Detailed step by step cooking instructions",
+      "prep_time": "15 mins",
+      "calories": "200-250",
+      "protein": "15g",
+      "benefits": "How this helps achieve the goal"
+    }
+  ]
+}
+
+Make dishes more authentic with proper names, realistic cooking times, and accurate nutritional info.`, initialResponse, judgeResponse, goalsSummary, mealType)
+
+	refineMessages := []Message{
+		{Role: "system", Content: "You are an expert chef and nutritionist. Improve meal suggestions based on feedback. Return ONLY valid JSON."},
+		{Role: "user", Content: refinePrompt},
+	}
+
+	refinedResponse, err := c.Chat(refineMessages)
+	if err != nil {
+		return initialResponse, nil
+	}
+
+	return refinedResponse, nil
 }
