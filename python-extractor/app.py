@@ -130,8 +130,7 @@ def detect_provider(pdf_path: str) -> str:
                 elif "blinkit" in text_lower or "grofers" in text_lower:
                     logger.info("Detected provider: blinkit")
                     return "blinkit"
-                elif "swiggy" in text_lower or "instamart" in text_lower:
-                    logger.info("Detected provider: swiggy")
+                else:
                     return "swiggy"
     
     logger.warning("Could not detect provider, returning 'unknown'")
