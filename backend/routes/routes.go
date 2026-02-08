@@ -66,6 +66,10 @@ func SetupRouter() *chi.Mux {
 		// LLM with auth (for personalized suggestions)
 		r.Post("/llm/suggest-meal-personalized", controllers.SuggestMealPersonalized)
 		r.Post("/llm/chat", controllers.ChatBot)
+
+		// Conversations
+		r.Post("/conversations", controllers.SaveConversation)
+		r.Get("/conversations", controllers.GetConversations)
 	})
 
 	// Server-Sent Events for real-time nutrition updates

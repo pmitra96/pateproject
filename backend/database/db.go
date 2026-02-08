@@ -45,6 +45,7 @@ func InitDB() {
 		&models.PantryItem{},
 		&models.Goal{},
 		&models.MealLog{},
+		&models.Conversation{},
 	)
 	if err != nil {
 		log.Fatal("Failed to migrate database: ", err)

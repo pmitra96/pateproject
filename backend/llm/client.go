@@ -521,3 +521,34 @@ For meal suggestions, use only ingredients from the inventory.`, inventoryText, 
 
 	return c.Chat(messages)
 }
+
+// SummarizeConversation creates a brief summary of a chat conversation
+func (c *Client) SummarizeConversation(messages []ChatMessage) (string, error) {
+	if len(messages) == 0 {
+		return "", fmt.Errorf("no messages to summarize")
+	}
+
+	// Build conversation text
+	var conversationText string
+	for _, msg := range messages {
+		role := "User"
+		if msg.Role == "assistant" {
+			role = "Assistant"
+		}
+		conversationText += fmt.Sprintf("%s: %s\n", role, msg.Content)
+	}
+
+	prompt := fmt.Sprintf(`Summarize this kitchen/pantry conversation in 1-2 sentences. Focus on what the user asked about and key recommendations given.
+
+Conversation:
+%s
+
+Return ONLY the summary, no other text.`, conversationText)
+
+	summaryMessages := []Message{
+		{Role: "system", Content: "You are a summarizer. Create brief, informative summaries of conversations."},
+		{Role: "user", Content: prompt},
+	}
+
+	return c.Chat(summaryMessages)
+}

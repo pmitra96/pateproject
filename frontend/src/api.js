@@ -194,3 +194,24 @@ export const sendChatMessage = async (message, history, inventory, goals) => {
   if (!res.ok) throw new Error('Failed to get chat response');
   return res.json();
 };
+
+export const saveConversation = async (messages) => {
+  const res = await fetch(`${API_BASE}/conversations`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({ messages })
+  });
+  if (!res.ok) throw new Error('Failed to save conversation');
+  return res.json();
+};
+
+export const fetchConversations = async () => {
+  const res = await fetch(`${API_BASE}/conversations`, {
+    headers: getAuthHeader()
+  });
+  if (!res.ok) throw new Error('Failed to fetch conversations');
+  return res.json();
+};

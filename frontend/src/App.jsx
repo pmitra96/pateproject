@@ -15,7 +15,9 @@ import {
   logMeal,
   fetchMealHistory,
   deleteMealLog,
-  sendChatMessage
+  sendChatMessage,
+  saveConversation,
+  fetchConversations
 } from './api';
 
 function App() {
@@ -49,6 +51,8 @@ function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [pastConversations, setPastConversations] = useState([]);
+  const [showConversationHistory, setShowConversationHistory] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -353,6 +357,33 @@ function App() {
       setChatMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, I encountered an error. Please try again.' }]);
     } finally {
       setIsChatLoading(false);
+    }
+  };
+
+  const handleNewChat = async () => {
+    // Save current conversation if it has messages
+    if (chatMessages.length > 0) {
+      try {
+        await saveConversation(chatMessages);
+        // Refresh conversation history
+        const convs = await fetchConversations();
+        setPastConversations(convs || []);
+      } catch (err) {
+        console.error('Failed to save conversation', err);
+      }
+    }
+    // Clear messages for new chat
+    setChatMessages([]);
+    setShowConversationHistory(false);
+  };
+
+  const loadConversationHistory = async () => {
+    try {
+      const convs = await fetchConversations();
+      setPastConversations(convs || []);
+      setShowConversationHistory(true);
+    } catch (err) {
+      console.error('Failed to load conversations', err);
     }
   };
 
@@ -1114,14 +1145,35 @@ function App() {
               <div style={{
                 background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                 color: 'white',
-                padding: '1rem',
-                fontWeight: 600
+                padding: '0.75rem 1rem',
+                fontWeight: 600,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
               }}>
-                🤖 Kitchen Assistant
-                <div style={{ fontSize: '0.75rem', opacity: 0.9, fontWeight: 400 }}>Ask about your pantry, meals & nutrition</div>
+                <div>
+                  🤖 Kitchen Assistant
+                  <div style={{ fontSize: '0.7rem', opacity: 0.9, fontWeight: 400 }}>Ask about your pantry, meals & nutrition</div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    onClick={loadConversationHistory}
+                    style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '6px', padding: '0.4rem 0.6rem', color: 'white', cursor: 'pointer', fontSize: '0.75rem' }}
+                    title="Past conversations"
+                  >
+                    📜
+                  </button>
+                  <button
+                    onClick={handleNewChat}
+                    style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '6px', padding: '0.4rem 0.6rem', color: 'white', cursor: 'pointer', fontSize: '0.75rem' }}
+                    title="New conversation"
+                  >
+                    ✨ New
+                  </button>
+                </div>
               </div>
 
-              {/* Messages */}
+              {/* Messages or History */}
               <div style={{
                 flex: 1,
                 overflowY: 'auto',
@@ -1130,15 +1182,34 @@ function App() {
                 flexDirection: 'column',
                 gap: '0.75rem'
               }}>
-                {chatMessages.length === 0 && (
-                  <div style={{ color: 'var(--text-secondary)', textAlign: 'center', marginTop: '2rem' }}>
-                    <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>👋</div>
-                    <div>Hi! Ask me anything about your pantry or meals.</div>
-                    <div style={{ fontSize: '0.8rem', marginTop: '1rem', color: '#999' }}>
-                      Try: "What can I make for dinner?" or "What's running low?"
+                {showConversationHistory ? (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                      <span style={{ fontWeight: 600, color: '#333' }}>📜 Past Conversations</span>
+                      <button onClick={() => setShowConversationHistory(false)} style={{ background: 'none', border: 'none', color: '#667eea', cursor: 'pointer', fontSize: '0.85rem' }}>← Back</button>
                     </div>
-                  </div>
-                )}
+                    {pastConversations.length === 0 ? (
+                      <div style={{ color: '#999', textAlign: 'center', marginTop: '2rem' }}>No saved conversations yet</div>
+                    ) : (
+                      pastConversations.map((conv, idx) => (
+                        <div key={idx} style={{ padding: '0.75rem', background: '#f8f9fa', borderRadius: '8px', borderLeft: '3px solid #667eea' }}>
+                          <div style={{ fontSize: '0.8rem', color: '#999', marginBottom: '0.25rem' }}>{conv.created_at}</div>
+                          <div style={{ fontSize: '0.9rem', color: '#333' }}>{conv.summary}</div>
+                        </div>
+                      ))
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {chatMessages.length === 0 && (
+                      <div style={{ color: 'var(--text-secondary)', textAlign: 'center', marginTop: '2rem' }}>
+                        <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>👋</div>
+                        <div>Hi! Ask me anything about your pantry or meals.</div>
+                        <div style={{ fontSize: '0.8rem', marginTop: '1rem', color: '#999' }}>
+                          Try: "What can I make for dinner?" or "What's running low?"
+                        </div>
+                      </div>
+                    )}
                 {chatMessages.map((msg, idx) => (
                   <div key={idx} style={{
                     alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
@@ -1164,6 +1235,8 @@ function App() {
                   }}>
                     ⏳ Thinking...
                   </div>
+                )}
+                  </>
                 )}
               </div>
 

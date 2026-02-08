@@ -158,3 +158,14 @@ type MealLog struct {
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
 }
+
+// Conversation stores chat conversation summaries for users
+type Conversation struct {
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	UserID    uint           `gorm:"not null;index" json:"user_id"`
+	Summary   string         `gorm:"type:text" json:"summary"`
+	Messages  string         `gorm:"type:text" json:"messages"` // JSON array of messages
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
