@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { GoogleLogin } from '@react-oauth/google';
 import { jwtDecode } from 'jwt-decode';
-import { fetchPantry, updatePantryItem, extractItems, ingestOrder } from './api';
+import { fetchPantry, updatePantryItem, deletePantryItem, extractItems, ingestOrder } from './api';
 
 function App() {
   const [pantry, setPantry] = useState([]);
@@ -12,6 +12,7 @@ function App() {
 
   const [editingId, setEditingId] = useState(null);
   const [editValue, setEditValue] = useState('');
+  const [deletingItem, setDeletingItem] = useState(null);
   const [user, setUser] = useState(null);
   const [extractionResult, setExtractionResult] = useState(null);
   const [isExtracting, setIsExtracting] = useState(false);
@@ -84,6 +85,23 @@ function App() {
       setPantry(data);
     } catch (err) {
       console.error("Failed to save", err);
+    }
+  };
+
+  const handleDelete = (item) => {
+    setDeletingItem(item);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingItem) return;
+    try {
+      await deletePantryItem(deletingItem.item_id);
+      const data = await fetchPantry();
+      setPantry(data);
+      setDeletingItem(null);
+    } catch (err) {
+      console.error("Failed to delete", err);
+      alert("Failed to delete item");
     }
   };
 
@@ -204,6 +222,7 @@ function App() {
                         <td style={{ padding: '0.75rem 0' }}><span className="badge">{item.item.unit}</span></td>
                         <td style={{ padding: '0.75rem 0', textAlign: 'right' }}>
                           <button className="icon-btn" onClick={() => handleEdit(item)}>Update</button>
+                          <button className="icon-btn" style={{ marginLeft: '0.5rem', color: 'var(--danger)' }} onClick={() => handleDelete(item)}>Delete</button>
                         </td>
                       </tr>
                     );
@@ -312,6 +331,19 @@ function App() {
             <div className="flex-between">
               <button className="btn btn-secondary" onClick={() => setEditingId(null)}>Cancel</button>
               <button className="btn" onClick={() => handleSave(editingId)}>Update</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deletingItem && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div className="glass-panel p-6" style={{ width: '320px' }}>
+            <h2 className="mb-4">Delete Item</h2>
+            <p className="text-secondary mb-6">Are you sure you want to delete <strong>{deletingItem.item.name}</strong> from your pantry?</p>
+            <div className="flex-between">
+              <button className="btn btn-secondary" onClick={() => setDeletingItem(null)}>Cancel</button>
+              <button className="btn" style={{ background: 'var(--danger)' }} onClick={handleConfirmDelete}>Delete</button>
             </div>
           </div>
         </div>

@@ -27,6 +27,14 @@ export const updatePantryItem = async (itemID, manualQuantity) => {
   if (!res.ok) throw new Error('Failed to update item');
 };
 
+export const deletePantryItem = async (itemID) => {
+  const res = await fetch(`${API_BASE}/pantry/${itemID}`, {
+    method: 'DELETE',
+    headers: getAuthHeader()
+  });
+  if (!res.ok) throw new Error('Failed to delete item');
+};
+
 export const fetchLowStock = async () => {
   const res = await fetch(`${API_BASE}/pantry/low-stock`, {
     headers: getAuthHeader()

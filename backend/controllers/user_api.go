@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/pmitra96/pateproject/database"
+	"github.com/pmitra96/pateproject/logger"
 	"github.com/pmitra96/pateproject/middleware"
 	"github.com/pmitra96/pateproject/models"
 )
@@ -174,4 +175,30 @@ func GetLowStock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(lowStock)
+}
+
+func DeletePantryItem(w http.ResponseWriter, r *http.Request) {
+	userID, _ := getUserID(r)
+	itemIDStr := chi.URLParam(r, "item_id")
+
+	itemID, err := strconv.Atoi(itemIDStr)
+	if err != nil {
+		http.Error(w, "Invalid item ID", http.StatusBadRequest)
+		return
+	}
+
+	logger.Info("Deleting pantry item", "user_id", userID, "item_id", itemID)
+
+	var pantryItem models.PantryItem
+	if err := database.DB.Where("user_id = ? AND item_id = ?", userID, itemID).First(&pantryItem).Error; err != nil {
+		http.Error(w, "Item not found in pantry", http.StatusNotFound)
+		return
+	}
+
+	if err := database.DB.Delete(&pantryItem).Error; err != nil {
+		http.Error(w, "Failed to delete item", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

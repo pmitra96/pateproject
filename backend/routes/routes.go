@@ -37,6 +37,7 @@ func SetupRouter() *chi.Mux {
 		r.Use(auth.OAuthMiddleware)
 		r.Get("/pantry", controllers.GetPantry)
 		r.Patch("/pantry/{item_id}", controllers.UpdatePantryItem)
+		r.Delete("/pantry/{item_id}", controllers.DeletePantryItem)
 		r.Get("/pantry/low-stock", controllers.GetLowStock)
 		r.Get("/items", controllers.GetItems)
 		r.Post("/items", controllers.CreateItem)
