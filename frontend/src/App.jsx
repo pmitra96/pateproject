@@ -1,7 +1,18 @@
 import { useState, useEffect } from 'react';
 import { GoogleLogin } from '@react-oauth/google';
 import { jwtDecode } from 'jwt-decode';
-import { fetchPantry, updatePantryItem, deletePantryItem, bulkDeletePantryItems, extractItems, ingestOrder } from './api';
+import {
+  fetchPantry,
+  updatePantryItem,
+  deletePantryItem,
+  bulkDeletePantryItems,
+  extractItems,
+  ingestOrder,
+  suggestMealPersonalized,
+  fetchGoals,
+  createGoal,
+  deleteGoal
+} from './api';
 
 function App() {
   const [pantry, setPantry] = useState([]);
@@ -314,6 +325,56 @@ function App() {
             )}
           </div>
 
+          {mealSuggestions && (
+            <div className="glass-panel p-6 mb-6" style={{ background: 'linear-gradient(135deg, var(--card-bg) 0%, var(--bg-color) 100%)', borderLeft: '4px solid #8b5cf6' }}>
+              <div className="flex-between mb-4">
+                <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  ✨ Personalized Suggestions
+                </h2>
+                <button className="icon-btn" onClick={() => setMealSuggestions(null)}>Clear</button>
+              </div>
+
+              {(() => {
+                try {
+                  const data = typeof mealSuggestions === 'string' ? JSON.parse(mealSuggestions) : mealSuggestions;
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      <div className="text-secondary mb-2">
+                        Suggestions for your <strong>{data.meal_type}</strong> based on your goal of <strong>{data.goal}</strong>:
+                      </div>
+                      <div className="grid-cols-auto">
+                        {data.meals.map((meal, i) => (
+                          <div key={i} className="glass-panel p-4" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                            <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem' }}>{meal.name}</h3>
+                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                              <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9' }}>🔥 {meal.calories} kcal</span>
+                              <span className="badge" style={{ background: '#dcfce7', color: '#15803d' }}>💪 {meal.protein} protein</span>
+                              <span className="badge">⏱️ {meal.prep_time}</span>
+                            </div>
+                            <div className="text-secondary mb-3" style={{ fontSize: '0.8rem', flex: 1 }}>
+                              <strong>Benefits:</strong> {meal.benefits}
+                            </div>
+                            <details style={{ fontSize: '0.85rem', cursor: 'pointer' }}>
+                              <summary style={{ color: 'var(--accent-color)', fontWeight: 500 }}>View Recipe</summary>
+                              <div style={{ padding: '0.5rem 0', borderTop: '1px solid var(--border-color)', marginTop: '0.5rem' }}>
+                                <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Ingredients:</div>
+                                <div className="text-secondary mb-2">{meal.ingredients.join(', ')}</div>
+                                <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Instructions:</div>
+                                <div className="text-secondary">{meal.instructions}</div>
+                              </div>
+                            </details>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                } catch (e) {
+                  return <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.875rem' }}>{mealSuggestions}</pre>;
+                }
+              })()}
+            </div>
+          )}
+
           {loading ? (
             <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}><div className="loader"></div></div>
           ) : !user ? (
@@ -570,6 +631,38 @@ function App() {
             <div className="flex-between">
               <button className="btn btn-secondary" onClick={() => setShowBulkDeleteConfirm(false)}>Cancel</button>
               <button className="btn" style={{ background: 'var(--danger)' }} onClick={handleConfirmBulkDelete}>Delete All</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAddGoal && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div className="glass-panel p-6" style={{ width: '400px' }}>
+            <h2 className="mb-4">🎯 Add Health Goal</h2>
+            <div className="mb-4">
+              <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.25rem' }}>Goal Title</label>
+              <input
+                type="text"
+                placeholder="e.g. Lose 5kg, Build Muscle"
+                style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px' }}
+                value={newGoalTitle}
+                onChange={e => setNewGoalTitle(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="mb-6">
+              <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.25rem' }}>Description (optional)</label>
+              <textarea
+                placeholder="Give more context to the AI..."
+                style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px', minHeight: '80px', fontFamily: 'inherit' }}
+                value={newGoalDescription}
+                onChange={e => setNewGoalDescription(e.target.value)}
+              />
+            </div>
+            <div className="flex-between">
+              <button className="btn btn-secondary" onClick={() => setShowAddGoal(false)}>Cancel</button>
+              <button className="btn" onClick={handleAddGoal}>Save Goal</button>
             </div>
           </div>
         </div>
