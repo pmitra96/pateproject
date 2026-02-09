@@ -1,0 +1,110 @@
+[
+  {
+    "cuisine": "South Indian",
+    "region": "India",
+    "dish": "Ragi Idli (Finger Millet Steamed Cakes)",
+    "details": "A nutrient-dense, gluten-free variation of the traditional rice idli using finger millet (ragi), which is rich in calcium and fiber.",
+    "ingredients": [
+      "2 cups Ragi flour",
+      "1 cup Urad dal (split black gram)",
+      "1/2 cup Fenugreek seeds (methi)",
+      "Salt to taste",
+      "Water for batter"
+    ],
+    "process": [
+      "Soak urad dal and fenugreek seeds for 4-5 hours, then grind into a smooth paste.",
+      "Mix ragi flour with water to a lump-free consistency and combine with the dal paste.",
+      "Ferment the batter overnight (8-10 hours) to enhance probiotics.",
+      "Steam the fermented batter in idli moulds for 10-12 minutes until fluffy.",
+      "Serve hot with vegetable-rich sambar or mint chutney."
+    ],
+    "calorific_value_per_serving": "Approx. 60 kcal per medium idli",
+    "benefits": [
+      "High fiber content increases satiety and prevents overeating.",
+      "Low Glycemic Index (GI) helps regulate blood sugar levels.",
+      "Rich in calcium and iron, supporting bone health during weight loss."
+    ]
+  },
+  {
+    "cuisine": "South Indian",
+    "region": "Andhra Pradesh, India",
+    "dish": "Pesarattu (Whole Moong Dal Dosa)",
+    "details": "A protein-packed breakfast crepe from Andhra Pradesh made with whole green gram (moong dal) instead of rice.",
+    "ingredients": [
+      "1 cup Whole green moong dal",
+      "1-2 Green chilies",
+      "1 inch Ginger",
+      "1/2 tsp Cumin seeds (jeera)",
+      "Salt to taste",
+      "Minimal oil for cooking"
+    ],
+    "process": [
+      "Soak moong dal for at least 6 hours or overnight.",
+      "Grind the soaked dal with green chilies, ginger, and cumin into a smooth batter.",
+      "Heat a non-stick tawa and spread a ladle of batter into a thin circle.",
+      "Apply a few drops of oil and cook on both sides until golden brown and crispy.",
+      "Serve with ginger chutney for improved digestion."
+    ],
+    "calorific_value_per_serving": "Approx. 95-120 kcal per dosa",
+    "benefits": [
+      "Excellent source of plant-based protein for muscle retention.",
+      "Rich in folic acid and potassium, aiding metabolism.",
+      "High dietary fiber promotes gut health and lowers cholesterol."
+    ]
+  },
+  {
+    "cuisine": "South Indian",
+    "region": "India",
+    "dish": "Vegetable Oats Upma",
+    "details": "A high-fiber, savory porridge where traditional semolina (rava) is replaced with heart-healthy rolled or quick-cooking oats.",
+    "ingredients": [
+      "1 cup Oats (rolled or instant)",
+      "1 cup Mixed vegetables (carrots, beans, peas)",
+      "1 small Onion (chopped)",
+      "1/2 tsp Mustard seeds",
+      "Curry leaves and green chilies",
+      "1 tsp Oil"
+    ],
+    "process": [
+      "Dry roast the oats for 2-3 minutes until slightly aromatic and set aside.",
+      "Heat oil in a pan, add mustard seeds, curry leaves, and green chilies.",
+      "Sauté onions until translucent, then add mixed vegetables and cook until tender.",
+      "Add 2 cups of water and salt; bring to a boil.",
+      "Slowly stir in the oats and cook for 3-5 minutes until the water is absorbed.",
+      "Garnish with coriander and a squeeze of lemon juice."
+    ],
+    "calorific_value_per_serving": "Approx. 180-210 kcal per bowl",
+    "benefits": [
+      "Beta-glucan fiber in oats helps reduce belly fat and cholesterol.",
+      "Keeps you full for longer, reducing mid-morning snack cravings.",
+      "Loaded with vitamins and minerals from the added vegetables."
+    ]
+  },
+  {
+    "cuisine": "South Indian",
+    "region": "Tamil Nadu, India",
+    "dish": "Kollu Rasam (Horse Gram Soup)",
+    "details": "A traditional South Indian medicinal soup known for its fat-burning properties, typically served as a starter or with brown rice.",
+    "ingredients": [
+      "1/2 cup Horse gram (Kollu)",
+      "1 Tomato (chopped)",
+      "Small ball of Tamarind",
+      "1 tsp Black pepper and cumin powder",
+      "Garlic cloves and curry leaves"
+    ],
+    "process": [
+      "Pressure cook horse gram until soft; reserve the nutrient-rich water.",
+      "Mash a portion of the cooked gram and set aside.",
+      "Extract tamarind juice and boil it with tomatoes, turmeric, and salt.",
+      "Add the horse gram water, mashed gram, and pepper-cumin powder.",
+      "Simmer until frothy. Temper with mustard seeds and curry leaves in minimal ghee.",
+      "Serve warm as a soup or with a small portion of red rice."
+    ],
+    "calorific_value_per_serving": "Approx. 80-100 kcal per bowl",
+    "benefits": [
+      "Horse gram is historically used in Ayurveda to 'melt' body fat.",
+      "Acts as a natural diuretic and aids in detoxification.",
+      "High protein content supports metabolic health."
+    ]
+  }
+]

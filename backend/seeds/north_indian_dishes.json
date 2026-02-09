@@ -1,0 +1,107 @@
+[
+  {
+    "cuisine": "North Indian",
+    "region": "India",
+    "dish": "Besan Chilla (Savory Gram Flour Pancake)",
+    "details": "A high-protein, gluten-free breakfast staple made from spiced chickpea flour and loaded with fresh vegetables.",
+    "ingredients": [
+      "1 cup Besan (gram flour)",
+      "1/2 cup Finely chopped onions & tomatoes",
+      "1/4 cup Grated carrots",
+      "Green chilies & Coriander leaves",
+      "1/4 tsp Turmeric & Ajwain (carom seeds)",
+      "Minimal oil for brushing"
+    ],
+    "process": [
+      "Mix besan with water to form a smooth, flowy batter.",
+      "Stir in the chopped vegetables, chilies, and spices.",
+      "Heat a non-stick tawa and spread a ladle of batter thinly.",
+      "Cook on medium heat until the edges turn crisp; flip and cook the other side.",
+      "Serve with homemade mint-coriander chutney."
+    ],
+    "calorific_value_per_serving": "Approx. 150-180 kcal per chilla",
+    "benefits": [
+      "High protein content from chickpea flour supports muscle maintenance.",
+      "Low glycemic index helps control blood sugar.",
+      "Rich in fiber and keeps you full longer."
+    ]
+  },
+  {
+    "cuisine": "North Indian",
+    "region": "India",
+    "dish": "Lauki Chana Dal (Bottle Gourd with Lentils)",
+    "details": "A light yet filling main course combining the hydrating properties of bottle gourd with the protein of split chickpeas.",
+    "ingredients": [
+      "2 cups Lauki (peeled & cubed)",
+      "1/2 cup Chana dal (soaked for 30 mins)",
+      "1 small Onion & Tomato",
+      "Ginger-garlic paste",
+      "Cumin seeds, Turmeric, & Hing (asafoetida)"
+    ],
+    "process": [
+      "Pressure cook chana dal and lauki with turmeric, salt, and 1.5 cups of water for 2-3 whistles.",
+      "In a separate pan, sauté cumin seeds, onions, and ginger-garlic paste with minimal oil.",
+      "Add tomatoes and cook until soft; stir in the cooked dal and lauki mix.",
+      "Simmer for 5 minutes and garnish with fresh coriander.",
+      "Pair with one whole wheat phulka or a small bowl of brown rice."
+    ],
+    "calorific_value_per_serving": "Approx. 120-150 kcal per serving",
+    "benefits": [
+      "Bottle gourd is 90% water, aiding hydration and weight loss.",
+      "Chana dal provides sustained energy and protein.",
+      "Low in fat and easy to digest."
+    ]
+  },
+  {
+    "cuisine": "North Indian",
+    "region": "India",
+    "dish": "Vegetable Dalia (Savory Broken Wheat Porridge)",
+    "details": "A fiber-rich one-pot meal that replaces rice with broken wheat, perfect for weight management and gut health.",
+    "ingredients": [
+      "1/2 cup Roasted Dalia (broken wheat)",
+      "1 cup Mixed chopped veggies (peas, beans, carrots)",
+      "1/2 tsp Cumin seeds",
+      "1 tsp Ghee (optional, for tempering)",
+      "Green chilies and salt"
+    ],
+    "process": [
+      "Dry roast dalia until it smells nutty (if not pre-roasted).",
+      "In a pressure cooker, sauté cumin seeds and vegetables.",
+      "Add the dalia and 2 cups of water.",
+      "Cook for 2 whistles on medium heat.",
+      "Fluff with a fork and serve with a side of plain curd."
+    ],
+    "calorific_value_per_serving": "Approx. 200-230 kcal per bowl",
+    "benefits": [
+      "High fiber content promotes digestive health.",
+      "Complex carbs provide steady energy release.",
+      "Rich in B vitamins and iron."
+    ]
+  },
+  {
+    "cuisine": "North Indian",
+    "region": "Punjab, India",
+    "dish": "Tandoori Paneer or Chicken Tikka (Grilled)",
+    "details": "A protein-heavy starter or main where the meat or cheese is marinated in yogurt and spices, then grilled without excess oil.",
+    "ingredients": [
+      "200g Paneer cubes or Lean Chicken Breast",
+      "1/2 cup Thick Curd (Dahi)",
+      "Ginger-garlic paste",
+      "Red chili powder, Garam masala, & Lemon juice",
+      "Skewered bell peppers and onions"
+    ],
+    "process": [
+      "Whisk spices and lemon juice into the curd to make a marinade.",
+      "Coat the paneer/chicken and let it rest for at least 30 minutes.",
+      "Skewer the pieces alternating with vegetables.",
+      "Grill in an oven or on a non-stick grill pan with a light spray of oil until charred.",
+      "Serve with a fresh onion-cucumber salad."
+    ],
+    "calorific_value_per_serving": "Approx. 250-300 kcal per serving",
+    "benefits": [
+      "High protein supports muscle building and satiety.",
+      "Yogurt marinade aids digestion and adds probiotics.",
+      "Grilling method keeps it low-fat compared to frying."
+    ]
+  }
+]

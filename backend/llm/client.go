@@ -271,6 +271,21 @@ type GoalInfo struct {
 	Description string `json:"description"`
 }
 
+type UserPreferencesInfo struct {
+	Country           string   `json:"country"`
+	State             string   `json:"state"`
+	City              string   `json:"city"`
+	PreferredCuisines []string `json:"preferred_cuisines"`
+}
+
+type DishSampleInfo struct {
+	Dish        string   `json:"dish"`
+	Cuisine     string   `json:"cuisine"`
+	Details     string   `json:"details"`
+	Ingredients []string `json:"ingredients"`
+	Calories    string   `json:"calories"`
+}
+
 func (c *Client) SuggestMeals(inventory []InventoryItem) (string, error) {
 	if len(inventory) == 0 {
 		return "", fmt.Errorf("no inventory items provided")
@@ -307,7 +322,7 @@ Format each meal clearly with the dish name as a header.`, items)
 	return c.Chat(messages)
 }
 
-func (c *Client) SuggestMealsPersonalized(inventory []InventoryItem, goals []GoalInfo, timeOfDay string) (string, error) {
+func (c *Client) SuggestMealsPersonalized(inventory []InventoryItem, goals []GoalInfo, timeOfDay string, preferences *UserPreferencesInfo, dishSamples []DishSampleInfo) (string, error) {
 	if len(inventory) == 0 {
 		return "", fmt.Errorf("no inventory items provided")
 	}
@@ -338,6 +353,40 @@ func (c *Client) SuggestMealsPersonalized(inventory []InventoryItem, goals []Goa
 		goalsSummary = "General healthy eating"
 	}
 
+	// Build user preferences context
+	var preferencesText string
+	if preferences != nil {
+		if preferences.Country != "" || preferences.State != "" || preferences.City != "" {
+			preferencesText = "\n\nUser's Location: "
+			locationParts := []string{}
+			if preferences.City != "" {
+				locationParts = append(locationParts, preferences.City)
+			}
+			if preferences.State != "" {
+				locationParts = append(locationParts, preferences.State)
+			}
+			if preferences.Country != "" {
+				locationParts = append(locationParts, preferences.Country)
+			}
+			preferencesText += strings.Join(locationParts, ", ")
+		}
+		if len(preferences.PreferredCuisines) > 0 {
+			preferencesText += "\nPreferred Cuisines: " + strings.Join(preferences.PreferredCuisines, ", ")
+		}
+	}
+
+	// Build dish samples context
+	var dishSamplesText string
+	if len(dishSamples) > 0 {
+		dishSamplesText = "\n\nReference dishes from user's preferred cuisines (use these as inspiration):\n"
+		for _, dish := range dishSamples {
+			dishSamplesText += fmt.Sprintf("- %s (%s): %s\n", dish.Dish, dish.Cuisine, dish.Details)
+			if dish.Calories != "" {
+				dishSamplesText += fmt.Sprintf("  Calories: %s\n", dish.Calories)
+			}
+		}
+	}
+
 	// Time context
 	mealType := "meal"
 	switch timeOfDay {
@@ -354,19 +403,21 @@ func (c *Client) SuggestMealsPersonalized(inventory []InventoryItem, goals []Goa
 	prompt := fmt.Sprintf(`Based on these ingredients in my pantry:
 
 %s
-%s
+%s%s%s
 
-Suggest 3 %s options that align with my goals.
+Suggest 3 %s options that align with my goals and preferred cuisines.
 
 IMPORTANT QUALITY GUIDELINES - Self-evaluate before responding:
-- Use AUTHENTIC dish names (real recipes, not generic names like "Vegetable Stir Fry")
+- Use AUTHENTIC dish names from the user's preferred cuisines (reference the dish samples provided)
 - Ensure cooking instructions are REALISTIC and detailed
 - Calorie estimates must be ACCURATE for portion sizes
 - Protein values must match the actual ingredients used
+- Prioritize dishes from user's preferred cuisines when possible
 
 IMPORTANT RULES:
 1. All meal portions MUST be calculated for EXACTLY 1 serving (for one person).
 2. Each ingredient in the "ingredients" list must include a specific weight/quantity (e.g., "150g Chicken breast", "2 Eggs", "1 cup Rice").
+3. If dish samples are provided, use them as inspiration for authentic dish names and preparation methods.
 
 IMPORTANT: Return ONLY valid JSON in this exact format, no other text:
 {
@@ -376,6 +427,7 @@ IMPORTANT: Return ONLY valid JSON in this exact format, no other text:
   "meals": [
     {
       "name": "Dish Name",
+      "cuisine": "Cuisine Type",
       "ingredients": ["100g ingredient 1", "2 units ingredient 2"],
       "instructions": "Step by step cooking instructions",
       "prep_time": "10 mins",
@@ -386,7 +438,7 @@ IMPORTANT: Return ONLY valid JSON in this exact format, no other text:
   ]
 }
 
-Set "confidence" (1-10) based on how well you followed the quality guidelines.`, items, goalsText, mealType, goalsSummary, mealType)
+Set "confidence" (1-10) based on how well you followed the quality guidelines.`, items, goalsText, preferencesText, dishSamplesText, mealType, goalsSummary, mealType)
 
 	messages := []Message{
 		{Role: "system", Content: "You are an expert nutritionist and chef. Suggest authentic, well-researched meals. Self-evaluate your response quality. Return ONLY valid JSON."},

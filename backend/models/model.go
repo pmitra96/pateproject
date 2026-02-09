@@ -169,3 +169,32 @@ type Conversation struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
+
+// UserPreferences stores user profile and preferences
+type UserPreferences struct {
+	ID                uint           `gorm:"primaryKey" json:"id"`
+	UserID            uint           `gorm:"not null;uniqueIndex" json:"user_id"`
+	Country           string         `gorm:"size:100" json:"country"`
+	State             string         `gorm:"size:100" json:"state"`
+	City              string         `gorm:"size:100" json:"city"`
+	PreferredCuisines string         `gorm:"type:text" json:"preferred_cuisines"` // Comma-separated list
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
+	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// DishSample stores sample dishes based on cuisine and location
+type DishSample struct {
+	ID                      uint           `gorm:"primaryKey" json:"id"`
+	Cuisine                 string         `gorm:"size:100;index" json:"cuisine"`
+	Region                  string         `gorm:"size:100;index" json:"region"`
+	Dish                    string         `gorm:"size:255;not null" json:"dish"`
+	Details                 string         `gorm:"type:text" json:"details"`
+	Ingredients             string         `gorm:"type:text" json:"ingredients"`               // JSON array
+	Process                 string         `gorm:"type:text" json:"process"`                   // JSON array
+	CalorificValuePerServing string        `gorm:"size:100" json:"calorific_value_per_serving"`
+	Benefits                string         `gorm:"type:text" json:"benefits"`                  // JSON array
+	CreatedAt               time.Time      `json:"created_at"`
+	UpdatedAt               time.Time      `json:"updated_at"`
+	DeletedAt               gorm.DeletedAt `gorm:"index" json:"-"`
+}

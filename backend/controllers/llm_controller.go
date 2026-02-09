@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/pmitra96/pateproject/database"
 	"github.com/pmitra96/pateproject/llm"
 	"github.com/pmitra96/pateproject/logger"
+	"github.com/pmitra96/pateproject/models"
 )
 
 type StoryRequest struct {
@@ -103,6 +105,14 @@ func SuggestMeal(w http.ResponseWriter, r *http.Request) {
 func SuggestMealPersonalized(w http.ResponseWriter, r *http.Request) {
 	logger.Info("Received personalized meal suggestion request")
 
+	userID, err := getUserID(r)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Unauthorized"})
+		return
+	}
+
 	var req PersonalizedMealRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -118,8 +128,49 @@ func SuggestMealPersonalized(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fetch user preferences
+	var userPrefs models.UserPreferences
+	var preferencesInfo *llm.UserPreferencesInfo
+	if err := database.DB.Where("user_id = ?", userID).First(&userPrefs).Error; err == nil {
+		var cuisines []string
+		json.Unmarshal([]byte(userPrefs.PreferredCuisines), &cuisines)
+		preferencesInfo = &llm.UserPreferencesInfo{
+			Country:           userPrefs.Country,
+			State:             userPrefs.State,
+			City:              userPrefs.City,
+			PreferredCuisines: cuisines,
+		}
+	}
+
+	// Fetch dish samples based on preferred cuisines
+	var dishSamples []llm.DishSampleInfo
+	if preferencesInfo != nil && len(preferencesInfo.PreferredCuisines) > 0 {
+		var dbDishes []models.DishSample
+		query := database.DB.Model(&models.DishSample{})
+		for i, cuisine := range preferencesInfo.PreferredCuisines {
+			if i == 0 {
+				query = query.Where("cuisine ILIKE ?", "%"+cuisine+"%")
+			} else {
+				query = query.Or("cuisine ILIKE ?", "%"+cuisine+"%")
+			}
+		}
+		query.Limit(8).Find(&dbDishes)
+
+		for _, d := range dbDishes {
+			var ingredients []string
+			json.Unmarshal([]byte(d.Ingredients), &ingredients)
+			dishSamples = append(dishSamples, llm.DishSampleInfo{
+				Dish:        d.Dish,
+				Cuisine:     d.Cuisine,
+				Details:     d.Details,
+				Ingredients: ingredients,
+				Calories:    d.CalorificValuePerServing,
+			})
+		}
+	}
+
 	client := llm.NewClient()
-	suggestions, err := client.SuggestMealsPersonalized(req.Inventory, req.Goals, req.TimeOfDay)
+	suggestions, err := client.SuggestMealsPersonalized(req.Inventory, req.Goals, req.TimeOfDay, preferencesInfo, dishSamples)
 
 	if err != nil {
 		logger.Error("Failed to generate personalized meal suggestions", "error", err)
@@ -129,7 +180,7 @@ func SuggestMealPersonalized(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.Info("Personalized meal suggestions generated", "items_count", len(req.Inventory), "goals_count", len(req.Goals), "time", req.TimeOfDay)
+	logger.Info("Personalized meal suggestions generated", "items_count", len(req.Inventory), "goals_count", len(req.Goals), "time", req.TimeOfDay, "dish_samples", len(dishSamples))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(MealSuggestionResponse{

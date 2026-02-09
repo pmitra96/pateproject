@@ -17,7 +17,9 @@ import {
   deleteMealLog,
   sendChatMessage,
   saveConversation,
-  fetchConversations
+  fetchConversations,
+  fetchUserPreferences,
+  updateUserPreferences
 } from './api';
 
 function App() {
@@ -54,6 +56,22 @@ function App() {
   const [pastConversations, setPastConversations] = useState([]);
   const [showConversationHistory, setShowConversationHistory] = useState(false);
 
+  // User preferences state
+  const [showPreferencesModal, setShowPreferencesModal] = useState(false);
+  const [userPreferences, setUserPreferences] = useState({
+    country: '',
+    state: '',
+    city: '',
+    preferred_cuisines: []
+  });
+  const [preferencesForm, setPreferencesForm] = useState({
+    country: '',
+    state: '',
+    city: '',
+    preferred_cuisines: []
+  });
+  const [newCuisine, setNewCuisine] = useState('');
+
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (token) {
@@ -81,10 +99,48 @@ function App() {
   useEffect(() => {
     if (user) {
       loadData();
+      loadPreferences();
     } else {
       setLoading(false);
     }
   }, [user, activeTab]);
+
+  const loadPreferences = async () => {
+    try {
+      const prefs = await fetchUserPreferences();
+      setUserPreferences(prefs);
+      setPreferencesForm(prefs);
+    } catch (err) {
+      console.error('Failed to load preferences', err);
+    }
+  };
+
+  const handleSavePreferences = async () => {
+    try {
+      const updated = await updateUserPreferences(preferencesForm);
+      setUserPreferences(updated);
+      setShowPreferencesModal(false);
+    } catch (err) {
+      console.error('Failed to save preferences', err);
+    }
+  };
+
+  const handleAddCuisine = () => {
+    if (newCuisine.trim() && !preferencesForm.preferred_cuisines.includes(newCuisine.trim())) {
+      setPreferencesForm(prev => ({
+        ...prev,
+        preferred_cuisines: [...prev.preferred_cuisines, newCuisine.trim()]
+      }));
+      setNewCuisine('');
+    }
+  };
+
+  const handleRemoveCuisine = (cuisine) => {
+    setPreferencesForm(prev => ({
+      ...prev,
+      preferred_cuisines: prev.preferred_cuisines.filter(c => c !== cuisine)
+    }));
+  };
 
   // SSE: Listen for real-time nutrition updates
   useEffect(() => {
@@ -398,6 +454,9 @@ function App() {
                 {user.picture && <img src={user.picture} alt="avatar" style={{ width: 16, height: 16, borderRadius: '50%' }} />}
                 <span>{user.name}</span>
               </div>
+              <button className="btn btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }} onClick={() => { setPreferencesForm(userPreferences); setShowPreferencesModal(true); }}>
+                ⚙️ Preferences
+              </button>
               <button className="btn btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }} onClick={() => { setUser(null); localStorage.removeItem('token'); }}>
                 Logout
               </button>
@@ -1281,6 +1340,108 @@ function App() {
             </div>
           )}
         </>
+      )}
+
+      {/* User Preferences Modal */}
+      {showPreferencesModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1001
+        }}>
+          <div style={{
+            background: 'white',
+            borderRadius: '16px',
+            padding: '2rem',
+            width: '450px',
+            maxHeight: '80vh',
+            overflowY: 'auto'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h2 style={{ margin: 0 }}>⚙️ Preferences</h2>
+              <button onClick={() => setShowPreferencesModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Country</label>
+                <input
+                  type="text"
+                  value={preferencesForm.country || ''}
+                  onChange={(e) => setPreferencesForm(prev => ({ ...prev, country: e.target.value }))}
+                  placeholder="e.g., India"
+                  style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid #ddd' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>State</label>
+                <input
+                  type="text"
+                  value={preferencesForm.state || ''}
+                  onChange={(e) => setPreferencesForm(prev => ({ ...prev, state: e.target.value }))}
+                  placeholder="e.g., Karnataka"
+                  style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid #ddd' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>City</label>
+                <input
+                  type="text"
+                  value={preferencesForm.city || ''}
+                  onChange={(e) => setPreferencesForm(prev => ({ ...prev, city: e.target.value }))}
+                  placeholder="e.g., Bangalore"
+                  style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid #ddd' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Preferred Cuisines</label>
+                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                  <input
+                    type="text"
+                    value={newCuisine}
+                    onChange={(e) => setNewCuisine(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleAddCuisine()}
+                    placeholder="e.g., South Indian"
+                    style={{ flex: 1, padding: '0.75rem', borderRadius: '8px', border: '1px solid #ddd' }}
+                  />
+                  <button onClick={handleAddCuisine} className="btn btn-primary" style={{ padding: '0.75rem 1rem' }}>Add</button>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  {(preferencesForm.preferred_cuisines || []).map((cuisine, idx) => (
+                    <span key={idx} style={{
+                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      color: 'white',
+                      padding: '0.4rem 0.8rem',
+                      borderRadius: '20px',
+                      fontSize: '0.85rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem'
+                    }}>
+                      {cuisine}
+                      <button onClick={() => handleRemoveCuisine(cuisine)} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: '1rem' }}>×</button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                <button onClick={() => setShowPreferencesModal(false)} className="btn btn-secondary" style={{ flex: 1 }}>Cancel</button>
+                <button onClick={handleSavePreferences} className="btn btn-primary" style={{ flex: 1 }}>Save Preferences</button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div >
   );

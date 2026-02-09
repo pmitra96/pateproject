@@ -70,6 +70,16 @@ func SetupRouter() *chi.Mux {
 		// Conversations
 		r.Post("/conversations", controllers.SaveConversation)
 		r.Get("/conversations", controllers.GetConversations)
+
+		// User Preferences
+		r.Get("/preferences", controllers.GetUserPreferences)
+		r.Put("/preferences", controllers.UpdateUserPreferences)
+
+		// Dish Samples
+		r.Get("/dish-samples", controllers.GetDishSamples)
+		r.Post("/dish-samples", controllers.CreateDishSample)
+		r.Post("/dish-samples/bulk", controllers.BulkCreateDishSamples)
+		r.Delete("/dish-samples/{dish_id}", controllers.DeleteDishSample)
 	})
 
 	// Server-Sent Events for real-time nutrition updates

@@ -215,3 +215,48 @@ export const fetchConversations = async () => {
   if (!res.ok) throw new Error('Failed to fetch conversations');
   return res.json();
 };
+
+export const fetchUserPreferences = async () => {
+  const res = await fetch(`${API_BASE}/preferences`, {
+    headers: getAuthHeader()
+  });
+  if (!res.ok) throw new Error('Failed to fetch preferences');
+  return res.json();
+};
+
+export const updateUserPreferences = async (preferences) => {
+  const res = await fetch(`${API_BASE}/preferences`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify(preferences)
+  });
+  if (!res.ok) throw new Error('Failed to update preferences');
+  return res.json();
+};
+
+export const fetchDishSamples = async (cuisine, region) => {
+  const params = new URLSearchParams();
+  if (cuisine) params.append('cuisine', cuisine);
+  if (region) params.append('region', region);
+  const res = await fetch(`${API_BASE}/dish-samples?${params}`, {
+    headers: getAuthHeader()
+  });
+  if (!res.ok) throw new Error('Failed to fetch dish samples');
+  return res.json();
+};
+
+export const createDishSamplesBulk = async (dishes) => {
+  const res = await fetch(`${API_BASE}/dish-samples/bulk`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify(dishes)
+  });
+  if (!res.ok) throw new Error('Failed to create dish samples');
+  return res.json();
+};
