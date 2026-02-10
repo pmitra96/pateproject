@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pmitra96/pateproject/config"
+	"github.com/pmitra96/pateproject/websearch"
 )
 
 type Message struct {
@@ -477,8 +478,8 @@ Set "confidence" (1-10) based on how well you followed the quality guidelines.`,
 		strings.Contains(initialResponse, `"confidence": 10`) ||
 		strings.Contains(initialResponse, `"confidence": 8`) ||
 		strings.Contains(initialResponse, `"confidence": 7`) {
-		// High confidence, return as-is
-		return initialResponse, nil
+		// High confidence, clean and return
+		return cleanJSONResponse(initialResponse), nil
 	}
 
 	// Low confidence - run judge and refine
@@ -520,10 +521,10 @@ Make dishes more authentic with proper names, realistic cooking times, and accur
 
 	refinedResponse, err := c.Chat(refineMessages)
 	if err != nil {
-		return initialResponse, nil
+		return cleanJSONResponse(initialResponse), nil
 	}
 
-	return refinedResponse, nil
+	return cleanJSONResponse(refinedResponse), nil
 }
 
 // ChatMessage represents a conversation message
@@ -617,4 +618,235 @@ Return ONLY the summary, no other text.`, conversationText)
 	}
 
 	return c.Chat(summaryMessages)
+}
+
+// WebSearchDishInfo represents dish info from web search
+type WebSearchDishInfo struct {
+	DishName    string `json:"dish_name"`
+	Description string `json:"description"`
+	Cuisine     string `json:"cuisine"`
+	Source      string `json:"source"`
+}
+
+// SuggestMealsWithWebSearch uses web search results when database samples aren't found
+func (c *Client) SuggestMealsWithWebSearch(inventory []InventoryItem, goals []GoalInfo, timeOfDay string, preferences *UserPreferencesInfo, webResults []websearch.DishSearchResult) (string, error) {
+	if len(inventory) == 0 {
+		return "", fmt.Errorf("no inventory items provided")
+	}
+
+	// Build inventory list
+	var items string
+	for _, item := range inventory {
+		items += fmt.Sprintf("- %s: %.0f %s\n", item.Name, item.Quantity, item.Unit)
+	}
+
+	// Build goals list
+	var goalsText string
+	var goalsSummary string
+	if len(goals) > 0 {
+		goalsText = "\n\nMy health/fitness goals:\n"
+		for i, goal := range goals {
+			goalsText += fmt.Sprintf("- %s", goal.Title)
+			if goal.Description != "" {
+				goalsText += fmt.Sprintf(": %s", goal.Description)
+			}
+			goalsText += "\n"
+			if i == 0 {
+				goalsSummary = goal.Title
+			}
+		}
+	} else {
+		goalsText = "\n\nNo specific health goals set."
+		goalsSummary = "General healthy eating"
+	}
+
+	// Build user preferences context
+	var preferencesText string
+	var locationStr string
+	if preferences != nil {
+		locationParts := []string{}
+		if preferences.City != "" {
+			locationParts = append(locationParts, preferences.City)
+		}
+		if preferences.State != "" {
+			locationParts = append(locationParts, preferences.State)
+		}
+		if preferences.Country != "" {
+			locationParts = append(locationParts, preferences.Country)
+		}
+		if len(locationParts) > 0 {
+			locationStr = strings.Join(locationParts, ", ")
+			preferencesText = "\n\nUser's Location: " + locationStr
+		}
+		if len(preferences.PreferredCuisines) > 0 {
+			preferencesText += "\nPreferred Cuisines: " + strings.Join(preferences.PreferredCuisines, ", ")
+		}
+	}
+
+	// Build web search results context
+	var webSearchText string
+	if len(webResults) > 0 {
+		webSearchText = "\n\nDishes found via web search (popular in user's region and cuisine preferences):\n"
+		for _, dish := range webResults {
+			webSearchText += fmt.Sprintf("- %s (%s): %s\n", dish.DishName, dish.Cuisine, dish.Description)
+		}
+		webSearchText += "\nUse these web search results as inspiration. Select dishes that can be made with the user's available pantry items."
+	}
+
+	// Time context
+	mealType := "meal"
+	switch timeOfDay {
+	case "morning":
+		mealType = "breakfast"
+	case "afternoon":
+		mealType = "lunch"
+	case "evening":
+		mealType = "dinner"
+	case "night":
+		mealType = "light snack"
+	}
+
+	// Get cuisine for prompt
+	cuisineForPrompt := "regional"
+	if preferences != nil && len(preferences.PreferredCuisines) > 0 {
+		cuisineForPrompt = preferences.PreferredCuisines[0]
+	}
+
+	prompt := fmt.Sprintf(`Based on these ingredients in my pantry:
+
+%s
+%s%s%s
+
+I searched the web for popular %s dishes and found the above results.
+
+Now suggest 3 %s options by:
+1. Looking at the web search results for dish ideas popular in my location/cuisine
+2. Selecting dishes that can be made with my available pantry ingredients
+3. Adapting the recipes to use what I have
+
+IMPORTANT QUALITY GUIDELINES:
+- Prioritize dishes from web search that match my available ingredients
+- Use AUTHENTIC dish names from the search results
+- Ensure cooking instructions are REALISTIC and detailed
+- Calorie estimates must be ACCURATE for portion sizes
+- If a web search dish needs ingredients I don't have, suggest a close alternative I can make
+
+IMPORTANT RULES:
+1. All meal portions MUST be calculated for EXACTLY 1 serving (for one person).
+2. Each ingredient in the "ingredients" list must include a specific weight/quantity.
+3. Clearly indicate which dish from web search inspired each suggestion.
+
+IMPORTANT: Return ONLY valid JSON in this exact format, no other text:
+{
+  "goal": "%s",
+  "meal_type": "%s",
+  "source": "web_search",
+  "confidence": 8,
+  "meals": [
+    {
+      "name": "Dish Name",
+      "cuisine": "Cuisine Type",
+      "inspired_by": "Name of dish from web search that inspired this",
+      "ingredients": ["100g ingredient 1", "2 units ingredient 2"],
+      "instructions": "Step by step cooking instructions",
+      "prep_time": "10 mins",
+      "calories": 250,
+      "protein": 15,
+      "benefits": "How this helps achieve the goal"
+    }
+  ]
+}`, items, goalsText, preferencesText, webSearchText, cuisineForPrompt, mealType, goalsSummary, mealType)
+
+	messages := []Message{
+		{Role: "system", Content: "You are an expert nutritionist and chef. You help users cook authentic regional dishes using their available pantry items. Use web search results as inspiration to suggest dishes that match the user's location and preferences. Return ONLY valid JSON."},
+		{Role: "user", Content: prompt},
+	}
+
+	// Log the prompt being sent
+	fmt.Println("\n========== LLM PROMPT (Web Search) ==========")
+	fmt.Println("SYSTEM:", messages[0].Content)
+	fmt.Println("\nUSER:", messages[1].Content)
+	fmt.Println("==============================================\n")
+
+	response, err := c.Chat(messages)
+	if err != nil {
+		return "", err
+	}
+
+	// Clean markdown code blocks from response
+	return cleanJSONResponse(response), nil
+}
+
+// cleanJSONResponse removes markdown code blocks from LLM JSON responses
+func cleanJSONResponse(response string) string {
+	response = strings.TrimSpace(response)
+	// Remove ```json or ``` markers
+	if strings.HasPrefix(response, "```json") {
+		response = strings.TrimPrefix(response, "```json")
+	} else if strings.HasPrefix(response, "```") {
+		response = strings.TrimPrefix(response, "```")
+	}
+	if strings.HasSuffix(response, "```") {
+		response = strings.TrimSuffix(response, "```")
+	}
+	return strings.TrimSpace(response)
+}
+
+// ExtractDishesFromWebSearch uses LLM to parse and clean web search results into structured dish info
+func (c *Client) ExtractDishesFromWebSearch(webResults []websearch.DishSearchResult, cuisine string) ([]DishSampleInfo, error) {
+	if len(webResults) == 0 {
+		return nil, nil
+	}
+
+	var resultsText string
+	for i, r := range webResults {
+		resultsText += fmt.Sprintf("%d. %s - %s\n", i+1, r.DishName, r.Description)
+	}
+
+	prompt := fmt.Sprintf(`Extract structured dish information from these web search results about %s cuisine:
+
+%s
+
+For each dish found, extract:
+- dish: The dish name (clean, no website names)
+- cuisine: The cuisine type
+- details: Brief description of the dish
+- ingredients: Common ingredients (if mentioned or if you know them)
+- calories: Approximate calories per serving (estimate if not mentioned)
+
+Return ONLY valid JSON array:
+[
+  {
+    "dish": "Dish Name",
+    "cuisine": "%s",
+    "details": "Brief description",
+    "ingredients": ["ingredient1", "ingredient2"],
+    "calories": "250 kcal"
+  }
+]
+
+Only include actual dish names, skip any non-food results.`, cuisine, resultsText, cuisine)
+
+	messages := []Message{
+		{Role: "system", Content: "You are a culinary expert. Extract structured dish information from search results. Return ONLY valid JSON."},
+		{Role: "user", Content: prompt},
+	}
+
+	response, err := c.Chat(messages)
+	if err != nil {
+		return nil, err
+	}
+
+	// Clean response
+	response = strings.TrimPrefix(response, "```json")
+	response = strings.TrimPrefix(response, "```")
+	response = strings.TrimSuffix(response, "```")
+	response = strings.TrimSpace(response)
+
+	var dishes []DishSampleInfo
+	if err := json.Unmarshal([]byte(response), &dishes); err != nil {
+		return nil, fmt.Errorf("failed to parse dish extraction: %w", err)
+	}
+
+	return dishes, nil
 }

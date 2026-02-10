@@ -9,6 +9,7 @@ import (
 	"github.com/pmitra96/pateproject/llm"
 	"github.com/pmitra96/pateproject/logger"
 	"github.com/pmitra96/pateproject/models"
+	"github.com/pmitra96/pateproject/websearch"
 )
 
 type StoryRequest struct {
@@ -166,7 +167,66 @@ func SuggestMealPersonalized(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := llm.NewClient()
-	suggestions, err := client.SuggestMealsPersonalized(req.Inventory, req.Goals, req.TimeOfDay, preferencesInfo, dishSamples)
+	var suggestions string
+
+	// If no dish samples found in database, fall back to web search
+	if len(dishSamples) == 0 && preferencesInfo != nil {
+		logger.Info("No dish samples in database, attempting web search fallback")
+
+		webClient := websearch.NewClient()
+		if webClient.IsConfigured() {
+			// Build location string
+			locationParts := []string{}
+			if preferencesInfo.City != "" {
+				locationParts = append(locationParts, preferencesInfo.City)
+			}
+			if preferencesInfo.State != "" {
+				locationParts = append(locationParts, preferencesInfo.State)
+			}
+			if preferencesInfo.Country != "" {
+				locationParts = append(locationParts, preferencesInfo.Country)
+			}
+			location := strings.Join(locationParts, ", ")
+
+			// Get cuisine for search
+			cuisine := ""
+			if len(preferencesInfo.PreferredCuisines) > 0 {
+				cuisine = preferencesInfo.PreferredCuisines[0]
+			}
+
+			// Extract pantry item names for search
+			pantryItems := make([]string, 0, len(req.Inventory))
+			for _, item := range req.Inventory {
+				pantryItems = append(pantryItems, item.Name)
+			}
+
+			// Search for dishes with ingredients context
+			webResults, webErr := webClient.SearchDishesWithIngredients(location, cuisine, pantryItems, 10)
+			if webErr != nil {
+				logger.Warn("Web search failed, falling back to LLM without samples", "error", webErr)
+			} else if len(webResults) > 0 {
+				logger.Info("Web search returned dishes", "count", len(webResults), "location", location, "cuisine", cuisine)
+
+				// Use web search results with LLM
+				suggestions, err = client.SuggestMealsWithWebSearch(req.Inventory, req.Goals, req.TimeOfDay, preferencesInfo, webResults)
+				if err == nil {
+					logger.Info("Meal suggestions generated from web search", "items_count", len(req.Inventory), "web_results", len(webResults))
+
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(MealSuggestionResponse{
+						Suggestions: suggestions,
+					})
+					return
+				}
+				logger.Warn("Web search LLM call failed, falling back to standard", "error", err)
+			}
+		} else {
+			logger.Info("Web search not configured, using LLM without dish samples")
+		}
+	}
+
+	// Standard flow with dish samples (or empty if none found)
+	suggestions, err = client.SuggestMealsPersonalized(req.Inventory, req.Goals, req.TimeOfDay, preferencesInfo, dishSamples)
 
 	if err != nil {
 		logger.Error("Failed to generate personalized meal suggestions", "error", err)

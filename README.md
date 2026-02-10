@@ -233,6 +233,15 @@ DB_SSLMODE=disable
 PYTHON_EXTRACTOR_URL=http://localhost:8081
 INGESTION_API_KEY=secret-key
 
+# LLM Configuration
+LLM_API_KEY=your-openai-api-key
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-3.5-turbo
+
+# Web Search (optional - for dish discovery when no local samples found)
+SERPAPI_KEY=your-serpapi-key
+WEBSEARCH_TYPE=serpapi
+
 # OAuth (Frontend)
 VITE_GOOGLE_CLIENT_ID=your-client-id
 ```
