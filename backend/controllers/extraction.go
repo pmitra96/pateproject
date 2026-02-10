@@ -24,7 +24,7 @@ func ExtractItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, fh, err := r.FormFile("invoice")
+	file, fh, err := r.FormFile("image")
 	if err != nil {
 		http.Error(w, "Error retrieving file", http.StatusBadRequest)
 		return
@@ -42,7 +42,7 @@ func ExtractItems(w http.ResponseWriter, r *http.Request) {
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
-	logger.Info("Saving invoice to temp file", "path", tempFile.Name())
+	logger.Info("Saving image to temp file", "path", tempFile.Name())
 	_, err = io.Copy(tempFile, file)
 	if err != nil {
 		http.Error(w, "Failed to save file", http.StatusInternalServerError)

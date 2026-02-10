@@ -319,7 +319,7 @@ def parse_raw_text(text: str):
         if (len(line) < 2 or 
             any(skip in line.lower() for skip in [
                 "item details", "delivered", "ordered on", "billing", 
-                "total", "invoice", "delivered to", "payment", "items count",
+                "total", "image", "delivered to", "payment", "items count",
                 "savings", "discount", "summary", "delivered at", "delivered on",
                 "items in this order", "how were your ordered", "bill details", "mrp"
             ]) or

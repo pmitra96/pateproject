@@ -54,7 +54,7 @@ def extract_with_pdfplumber(pdf_path):
 
 
 def parse_zepto_items(pdf_path):
-    """Attempt to parse Zepto invoice items."""
+    """Attempt to parse Zepto image items."""
     items = []
     
     with pdfplumber.open(pdf_path) as pdf:

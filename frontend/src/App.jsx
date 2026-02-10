@@ -19,14 +19,24 @@ import {
   saveConversation,
   fetchConversations,
   fetchUserPreferences,
-  updateUserPreferences
+  updateUserPreferences,
+  addPantryItem,
+  fetchRemainingDayState,
+  setGoalMacroTargets,
+  // validateMeal,
+  fetchNextAction
 } from './api';
+
+import RemainingDayPanel from './components/RemainingDayPanel';
+import NextActionCard from './components/NextActionCard';
+import MealBlockedBanner from './components/MealBlockedBanner';
+import MacroTargetModal from './components/MacroTargetModal';
 
 function App() {
   const [pantry, setPantry] = useState([]);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('inventory');
+  const [activeTab, setActiveTab] = useState('home');
   const [searchTerm, setSearchTerm] = useState('');
 
   const [editingId, setEditingId] = useState(null);
@@ -47,7 +57,16 @@ function App() {
   const [selectedMeal, setSelectedMeal] = useState(null);
   const [isLoggingMeal, setIsLoggingMeal] = useState(false);
   const [mealHistory, setMealHistory] = useState([]);
-  
+
+
+  // Remaining Day Control State
+  const [remainingDayState, setRemainingDayState] = useState(null);
+  const [nextAction, setNextAction] = useState(null);
+  const [showTargetModal, setShowTargetModal] = useState(false);
+  const [targetModalGoalId, setTargetModalGoalId] = useState(null);
+
+  const [currentBlockedReason, setCurrentBlockedReason] = useState(null);
+  const [requestOverride, setRequestOverride] = useState(false);
   // Chatbot state
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
@@ -71,6 +90,20 @@ function App() {
     preferred_cuisines: []
   });
   const [newCuisine, setNewCuisine] = useState('');
+
+  // Manual item add state
+  const [manualItemName, setManualItemName] = useState('');
+  const [manualItemQty, setManualItemQty] = useState('');
+  const [manualItemUnit, setManualItemUnit] = useState('pcs');
+  const [isAddingItem, setIsAddingItem] = useState(false);
+
+  // Meal logging state
+  const [mealName, setMealName] = useState('');
+  const [mealIngredients, setMealIngredients] = useState([]);
+  const [ingredientName, setIngredientName] = useState('');
+  const [ingredientQty, setIngredientQty] = useState('1');
+  const [ingredientUnit, setIngredientUnit] = useState('pcs');
+  const [ingredientSuggestions, setIngredientSuggestions] = useState([]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -100,10 +133,15 @@ function App() {
     if (user) {
       loadData();
       loadPreferences();
-    } else {
-      setLoading(false);
     }
   }, [user, activeTab]);
+  // Given loadData uses state, it should be wrapped or dep array fixed.
+  // For simplicity effectively suppressing by not adding it, as it might cause loops if not careful.
+  // But linter complained. Let's just suppress or leave as is if warning. 
+  // Actually, let's just leave it as a warning if it doesn't break build, but user might want clean output.
+  // Let's wrapping loadData in useCallback is too big of a change.
+  // I'll just suffix the line with eslint-disable-line if possible, but reacting to specific lines.
+  // Let's just fix the unused vars.
 
   const loadPreferences = async () => {
     try {
@@ -189,11 +227,36 @@ function App() {
     };
   }, [user]);
 
+
+  const loadState = async () => {
+    try {
+      const state = await fetchRemainingDayState();
+      setRemainingDayState(state);
+      // Also fetch next action if state exists
+      if (state) {
+        const action = await fetchNextAction();
+        setNextAction(action);
+      } else {
+        setNextAction(null);
+      }
+    } catch (err) {
+      console.error("Failed to load remaining day state", err);
+    }
+  };
+
   const loadData = async () => {
     setLoading(true);
     setSelectedIds(new Set());
     try {
-      if (activeTab === 'inventory') {
+      // Load state always if user exists
+      loadState();
+
+      if (activeTab === 'home') {
+        const data = await fetchPantry();
+        setPantry(data);
+        const goalsData = await fetchGoals();
+        setGoals(goalsData || []);
+      } else if (activeTab === 'inventory') {
         const data = await fetchPantry();
         setPantry(data);
         const goalsData = await fetchGoals();
@@ -289,8 +352,8 @@ function App() {
     try {
       const result = await extractItems(file);
       setExtractionResult(result);
-    } catch (err) {
-      alert("Failed to extract items from invoice.");
+    } catch {
+      alert("Failed to extract items from image.");
     } finally {
       setIsExtracting(false);
     }
@@ -318,6 +381,28 @@ function App() {
     } catch (err) {
       console.error("Ingestion failed", err);
       alert("Failed to ingest order.");
+    }
+  };
+
+  const handleManualAdd = async () => {
+    if (!manualItemName.trim() || !manualItemQty) {
+      alert("Please enter item name and quantity");
+      return;
+    }
+
+    setIsAddingItem(true);
+    try {
+      await addPantryItem(manualItemName, parseFloat(manualItemQty), manualItemUnit);
+      setManualItemName('');
+      setManualItemQty('');
+      setManualItemUnit('pcs');
+      alert("Item added successfully!");
+      loadData();
+    } catch (err) {
+      console.error("Failed to add item", err);
+      alert("Failed to add item");
+    } finally {
+      setIsAddingItem(false);
     }
   };
 
@@ -389,12 +474,12 @@ function App() {
 
   const handleSendChat = async () => {
     if (!chatInput.trim() || isChatLoading) return;
-    
+
     const userMessage = chatInput.trim();
     setChatInput('');
     setChatMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     setIsChatLoading(true);
-    
+
     try {
       const inventory = pantry.map(item => ({
         name: item.item.ingredient?.name || item.item.name,
@@ -405,7 +490,7 @@ function App() {
         title: g.title,
         description: g.description || ''
       }));
-      
+
       const result = await sendChatMessage(userMessage, chatMessages, inventory, goalsForLLM);
       setChatMessages(prev => [...prev, { role: 'assistant', content: result.response }]);
     } catch (err) {
@@ -424,8 +509,8 @@ function App() {
         // Refresh conversation history
         const convs = await fetchConversations();
         setPastConversations(convs || []);
-      } catch (err) {
-        console.error('Failed to save conversation', err);
+      } catch (_e) {
+        console.error('Failed to save conversation', _e);
       }
     }
     // Clear messages for new chat
@@ -442,6 +527,99 @@ function App() {
       console.error('Failed to load conversations', err);
     }
   };
+
+  // Meal Logging Handlers
+  const handleIngredientChange = (e) => {
+    const val = e.target.value;
+    setIngredientName(val);
+    if (val.trim().length > 1) {
+      const lower = val.toLowerCase();
+      const matches = pantry.filter(p =>
+        (p.item.ingredient?.name || p.item.name).toLowerCase().includes(lower)
+      ).slice(0, 5);
+      setIngredientSuggestions(matches);
+    } else {
+      setIngredientSuggestions([]);
+    }
+  };
+
+  const handleSuggestionClick = (pantryItem) => {
+    setIngredientName(pantryItem.item.ingredient?.name || pantryItem.item.name);
+    setIngredientUnit(pantryItem.item.unit || 'pcs');
+    setIngredientQty('1');
+    setIngredientSuggestions([]);
+  };
+
+  const addIngredient = () => {
+    if (!ingredientName.trim()) return;
+
+    const qty = parseFloat(ingredientQty) || 0;
+    if (qty <= 0) {
+      alert("Please enter a valid quantity");
+      return;
+    }
+
+    const name = `${qty} ${ingredientUnit} ${ingredientName}`;
+    setMealIngredients([...mealIngredients, name]);
+
+    // Reset fields
+    setIngredientName('');
+    setIngredientQty('1');
+    setIngredientUnit('pcs');
+    setIngredientSuggestions([]);
+  };
+
+  const removeIngredient = (idx) => {
+    setMealIngredients(mealIngredients.filter((_, i) => i !== idx));
+  };
+
+  const handleLogMealSubmit = async () => {
+    if (!mealName.trim() || mealIngredients.length === 0) {
+      alert("Please enter a meal name and at least one ingredient");
+      return;
+    }
+
+
+    try {
+      const response = await logMeal({
+        name: mealName,
+        ingredients: mealIngredients,
+        was_override: requestOverride
+      });
+      alert("Meal logged successfully!");
+      setMealName('');
+      setMealIngredients([]);
+      setCurrentBlockedReason(null);
+      setRequestOverride(false);
+
+      if (response.remaining_state) {
+        setRemainingDayState(response.remaining_state);
+        // If state mandates next action, use it
+        if (response.next_action) {
+          setNextAction(response.next_action);
+        } else {
+          // Fallback fetch if not provided
+          loadState();
+        }
+      } else {
+        loadState(); // Fallback
+      }
+
+      // Refresh history if needed
+      if (activeTab === 'nutrition') {
+        const history = await fetchMealHistory();
+        setMealHistory(history);
+      }
+    } catch (err) {
+      if (err.status === 403) {
+        setCurrentBlockedReason(err.reason);
+      } else {
+        console.error("Failed to log meal", err);
+        alert("Failed to log meal: " + err.message);
+      }
+    }
+  };
+
 
   return (
     <div className="App">
@@ -475,36 +653,54 @@ function App() {
       </header>
 
       <div className="tabs">
+        <div className={`tab ${activeTab === 'home' ? 'active' : ''}`} onClick={() => setActiveTab('home')}>Home</div>
         <div className={`tab ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')}>Inventory</div>
         <div className={`tab ${activeTab === 'goals' ? 'active' : ''}`} onClick={() => setActiveTab('goals')}>My Goals</div>
         <div className={`tab ${activeTab === 'nutrition' ? 'active' : ''}`} onClick={() => { setActiveTab('nutrition'); fetchMealHistory().then(setMealHistory).catch(console.error); }}>🔥 Nutrition</div>
         <div className={`tab ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')}>Order History</div>
-        <div className={`tab ${activeTab === 'upload' ? 'active' : ''}`} onClick={() => setActiveTab('upload')}>Upload Invoice</div>
+        <div className={`tab ${activeTab === 'log-meal' ? 'active' : ''}`} onClick={() => setActiveTab('log-meal')}>Log Meal</div>
+        <div className={`tab ${activeTab === 'upload' ? 'active' : ''}`} onClick={() => setActiveTab('upload')}>Add Items</div>
       </div>
 
-      {activeTab === 'inventory' && (
+      {activeTab === 'home' && (
         <section>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
-            <div className="search-container" style={{ marginBottom: 0 }}>
-              <span style={{ position: 'absolute', left: '0.75rem', top: '0.55rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>🔍</span>
-              <input
-                className="search-input"
-                placeholder="Search pantry..."
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-              />
+          <div className="glass-panel p-6 mb-6">
+            <h2 className="mb-4">👋 Welcome Back, {user?.name || 'Chef'}!</h2>
+            <p className="text-secondary">Here is your daily nutrition overview.</p>
+          </div>
+
+          {remainingDayState ? (
+            <RemainingDayPanel state={remainingDayState} />
+          ) : (
+            <div className="glass-panel p-4 mb-6 text-center text-secondary">
+              Set daily targets in <strong>My Goals</strong> to see your budget.
             </div>
-            {user && pantry.length > 0 && (
+          )}
+
+          {nextAction && (
+            <NextActionCard
+              action={nextAction}
+              onLog={(meal) => {
+                setSelectedMeal({ ...meal, benefits: "Recommended to meet your daily targets." });
+              }}
+              onOverride={() => setActiveTab('log-meal')}
+              onDone={() => setNextAction(null)}
+            />
+          )}
+
+          {/* Suggest Meal Button */}
+          {user && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
               <button
                 className="btn"
                 onClick={handleSuggestMeal}
                 disabled={isLoadingSuggestions}
-                style={{ whiteSpace: 'nowrap' }}
+                style={{ whiteSpace: 'nowrap', background: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)', boxShadow: '0 4px 6px -1px rgba(139, 92, 246, 0.4)' }}
               >
                 {isLoadingSuggestions ? '✨ Thinking...' : '✨ Suggest a Meal'}
               </button>
-            )}
-          </div>
+            </div>
+          )}
 
           {mealSuggestions && (
             <div className="glass-panel p-6 mb-6" style={{ background: 'linear-gradient(135deg, var(--card-bg) 0%, var(--bg-color) 100%)', borderLeft: '4px solid #8b5cf6' }}>
@@ -550,12 +746,175 @@ function App() {
                       </div>
                     </div>
                   );
-                } catch (e) {
+                } catch {
                   return <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.875rem' }}>{mealSuggestions}</pre>;
                 }
               })()}
             </div>
           )}
+        </section>
+      )}
+
+      {activeTab === 'log-meal' && (
+        <section>
+          <div className="glass-panel p-6" style={{ maxWidth: '600px', margin: '0 auto' }}>
+            <h2 className="mb-6">Manually Log Meal</h2>
+
+            <div className="mb-4">
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Meal Name</label>
+              <input
+                type="text"
+                placeholder="e.g. Scrambled Eggs with Toast"
+                style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}
+                value={mealName}
+                onChange={e => setMealName(e.target.value)}
+              />
+            </div>
+
+            <div className="mb-4" style={{ position: 'relative' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Add Ingredients</label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <input
+                  type="number"
+                  placeholder="Qty"
+                  style={{ width: '80px', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}
+                  value={ingredientQty}
+                  onChange={e => setIngredientQty(e.target.value)}
+                />
+                <select
+                  style={{ width: '90px', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'white' }}
+                  value={ingredientUnit}
+                  onChange={e => setIngredientUnit(e.target.value)}
+                >
+                  <option value="pcs">pcs</option>
+                  <option value="g">g</option>
+                  <option value="kg">kg</option>
+                  <option value="ml">ml</option>
+                  <option value="l">l</option>
+                  <option value="cup">cup</option>
+                  <option value="tbsp">tbsp</option>
+                  <option value="tsp">tsp</option>
+                  <option value="pack">pack</option>
+                  <option value="slice">slice</option>
+                </select>
+                <input
+                  type="text"
+                  placeholder="Ingredient Name"
+                  style={{ flex: 1, padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}
+                  value={ingredientName}
+                  onChange={handleIngredientChange}
+                  onKeyPress={e => e.key === 'Enter' && addIngredient()}
+                />
+                <button className="btn" onClick={addIngredient}>Add</button>
+              </div>
+
+              {ingredientSuggestions.length > 0 && (
+                <div style={{
+                  position: 'absolute',
+                  top: '100%',
+                  left: 0,
+                  right: 0,
+                  background: 'white',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '8px',
+                  marginTop: '0.25rem',
+                  zIndex: 10,
+                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+                }}>
+                  {ingredientSuggestions.map((item, i) => (
+                    <div
+                      key={i}
+                      style={{ padding: '0.75rem', cursor: 'pointer', borderBottom: i < ingredientSuggestions.length - 1 ? '1px solid #eee' : 'none' }}
+                      onClick={() => handleSuggestionClick(item)}
+                      onMouseOver={e => e.currentTarget.style.background = '#f9fafb'}
+                      onMouseOut={e => e.currentTarget.style.background = 'white'}
+                    >
+                      <div style={{ fontWeight: 500 }}>{item.item.ingredient?.name || item.item.name}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        In Stock: {item.effective_quantity} {item.item.unit}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="mb-6">
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Ingredients List</label>
+              {mealIngredients.length === 0 ? (
+                <div className="text-secondary" style={{ fontStyle: 'italic', padding: '1rem', background: 'rgba(0,0,0,0.02)', borderRadius: '8px', textAlign: 'center' }}>
+                  No ingredients added yet.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {mealIngredients.map((ing, idx) => (
+                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', background: 'white', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                      <span>{ing}</span>
+                      <button
+                        style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: '1.2rem' }}
+                        onClick={() => removeIngredient(idx)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <MealBlockedBanner
+              reason={currentBlockedReason}
+              onOverride={() => {
+                setRequestOverride(true);
+                // Optionally auto-submit
+                // handleLogMealSubmit(); 
+                // Better to let user click "Log Meal" again which now has override flag set?
+                // But the banner says "I understand, log anyway".
+                // If they click that, we should probably submit.
+                // But requestOverride state might not update immediately for next line execution.
+                // So we'll set state, and maybe call a function that passes true.
+                // Or simple: setRequestOverride(true) and change "Log Meal" button text?
+                // Let's make the banner button trigger the log with override.
+
+                // Actually, simpler: Set RequestOverride(true) and let user click Log Meal again.
+                // The banner persists until we clear it.
+              }}
+            />
+            {/* If override is requested, maybe highlight the button */}
+
+            <button
+              className="btn w-full"
+              style={{
+                padding: '1rem',
+                fontSize: '1rem',
+                background: requestOverride ? 'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)' : undefined
+              }}
+              onClick={handleLogMealSubmit}
+            >
+              {requestOverride ? 'Confirm Log (Override)' : 'Log Meal'}
+            </button>
+          </div>
+        </section>
+      )}
+
+
+      {activeTab === 'inventory' && (
+        <section>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+
+            <div className="search-container" style={{ marginBottom: 0 }}>
+              <span style={{ position: 'absolute', left: '0.75rem', top: '0.55rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>🔍</span>
+              <input
+                className="search-input"
+                placeholder="Search pantry..."
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+              />
+            </div>
+
+          </div>
+
+
 
           {loading ? (
             <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}><div className="loader"></div></div>
@@ -665,10 +1024,32 @@ function App() {
                           <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>{goal.title}</div>
                           {goal.description && <div className="text-secondary" style={{ fontSize: '0.875rem' }}>{goal.description}</div>}
                         </div>
-                        <button
-                          onClick={() => handleDeleteGoal(goal.id)}
-                          style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: '1.2rem' }}
-                        >×</button>
+
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button
+                            className="btn btn-secondary"
+                            style={{ fontSize: '0.8rem', padding: '0.3rem 0.6rem' }}
+                            onClick={() => {
+                              setTargetModalGoalId(goal.id);
+                              // Fetch current targets or use defaults?
+                              // The goal object might not have targets yet if the API doesn't return them in list.
+                              // We might need to fetch them or just open modal with defaults/previous.
+                              // For now, let's assume we start fresh or pass what we have.
+                              // Ideally fetchRemainingDayState gave us profile.
+                              // But that profile is for the *active* goal or user?
+                              // The backend links profile to goal.
+                              // Let's just open modal and let it handle defaults if not passed.
+                              setShowTargetModal(true);
+                            }}
+                          >
+                            🎯 Set Targets
+                          </button>
+                          <button
+                            onClick={() => handleDeleteGoal(goal.id)}
+                            style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: '1.2rem' }}
+                          >×</button>
+                        </div>
+
                       </div>
                     ))}
                   </div>
@@ -695,7 +1076,7 @@ function App() {
                           await createGoal(preset.title, preset.desc);
                           const goalsData = await fetchGoals();
                           setGoals(goalsData || []);
-                        } catch (err) {
+                        } catch {
                           alert('Failed to add goal');
                         }
                       }}
@@ -710,8 +1091,13 @@ function App() {
         </section>
       )}
 
+
       {activeTab === 'nutrition' && (
         <section>
+          {remainingDayState && (
+            <RemainingDayPanel state={remainingDayState} />
+          )}
+
           {!user ? (
             <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>Please log in to view nutrition insights.</div>
           ) : mealHistory.length === 0 ? (
@@ -866,10 +1252,59 @@ function App() {
       {
         activeTab === 'upload' && (
           <section>
+            <div className="glass-panel p-6 mb-6">
+              <h2 className="mb-4">Manual Entry</h2>
+              <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end' }}>
+                <div style={{ flex: 2 }}>
+                  <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem' }}>Item Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Milk, Eggs"
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px' }}
+                    value={manualItemName}
+                    onChange={e => setManualItemName(e.target.value)}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem' }}>Quantity</label>
+                  <input
+                    type="number"
+                    placeholder="0"
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px' }}
+                    value={manualItemQty}
+                    onChange={e => setManualItemQty(e.target.value)}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.875rem' }}>Unit</label>
+                  <select
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'white' }}
+                    value={manualItemUnit}
+                    onChange={e => setManualItemUnit(e.target.value)}
+                  >
+                    <option value="pcs">pcs</option>
+                    <option value="kg">kg</option>
+                    <option value="g">g</option>
+                    <option value="ml">ml</option>
+                    <option value="l">l</option>
+                    <option value="pack">pack</option>
+                  </select>
+                </div>
+                <button
+                  className="btn"
+                  onClick={handleManualAdd}
+                  disabled={isAddingItem}
+                  style={{ height: '38px', minWidth: '100px' }}
+                >
+                  {isAddingItem ? 'Adding...' : 'Add Item'}
+                </button>
+              </div>
+            </div>
+
             {!extractionResult ? (
               <div className="glass-panel p-6" style={{ textAlign: 'center', border: '2px dashed var(--border-color)', background: 'transparent' }}>
-                <h2 className="mb-2">Invoice Upload</h2>
-                <p className="text-secondary mb-6">Upload receipt to update inventory automatically.</p>
+                <h2 className="mb-2">Image Upload</h2>
+                <p className="text-secondary mb-6">Upload image to update inventory automatically.</p>
                 <label className="btn" style={{ cursor: 'pointer' }}>
                   {isExtracting ? <div className="loader" style={{ width: 14, height: 14 }}></div> : "Select File"}
                   <input type="file" hidden onChange={handleFileUpload} accept=".pdf,.jpg,.png" />
@@ -1116,7 +1551,7 @@ function App() {
                     if (typeof mealToLog.ingredients === 'string') {
                       try {
                         mealToLog.ingredients = JSON.parse(mealToLog.ingredients);
-                      } catch (e) {
+                      } catch {
                         mealToLog.ingredients = [];
                       }
                     }
@@ -1124,6 +1559,18 @@ function App() {
                     const result = await logMeal(mealToLog);
                     alert(`✅ Meal logged! Updated: ${result.updated_items?.join(', ') || 'No pantry items matched'}`);
                     setSelectedMeal(null);
+
+                    if (result.remaining_state) {
+                      setRemainingDayState(result.remaining_state);
+                      if (result.next_action) {
+                        setNextAction(result.next_action);
+                      } else {
+                        loadState();
+                      }
+                    } else {
+                      loadState();
+                    }
+
                     // Refresh pantry to show updated quantities
                     const data = await fetchPantry();
                     setPantry(data);
@@ -1153,7 +1600,28 @@ function App() {
         )
       }
 
+
+      {/* Target Modal */}
+      {showTargetModal && (
+        <MacroTargetModal
+          goalId={targetModalGoalId}
+          currentTargets={null} // We could pass existing if available
+          onClose={() => setShowTargetModal(false)}
+          onSave={async (gid, targets) => {
+            try {
+              await setGoalMacroTargets(gid, targets);
+              setShowTargetModal(false);
+              alert("Targets updated!");
+              loadState(); // Refresh state
+            } catch {
+              alert("Failed to set targets");
+            }
+          }}
+        />
+      )}
+
       {/* Floating Chatbot */}
+
       {user && (
         <>
           {/* Chat Toggle Button */}
@@ -1269,32 +1737,32 @@ function App() {
                         </div>
                       </div>
                     )}
-                {chatMessages.map((msg, idx) => (
-                  <div key={idx} style={{
-                    alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                    maxWidth: '80%',
-                    padding: '0.75rem 1rem',
-                    borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                    background: msg.role === 'user' ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' : '#f1f3f4',
-                    color: msg.role === 'user' ? 'white' : '#333',
-                    fontSize: '0.9rem',
-                    lineHeight: 1.4,
-                    whiteSpace: 'pre-wrap'
-                  }}>
-                    {msg.content}
-                  </div>
-                ))}
-                {isChatLoading && (
-                  <div style={{
-                    alignSelf: 'flex-start',
-                    padding: '0.75rem 1rem',
-                    borderRadius: '16px 16px 16px 4px',
-                    background: '#f1f3f4',
-                    color: '#666'
-                  }}>
-                    ⏳ Thinking...
-                  </div>
-                )}
+                    {chatMessages.map((msg, idx) => (
+                      <div key={idx} style={{
+                        alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                        maxWidth: '80%',
+                        padding: '0.75rem 1rem',
+                        borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                        background: msg.role === 'user' ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' : '#f1f3f4',
+                        color: msg.role === 'user' ? 'white' : '#333',
+                        fontSize: '0.9rem',
+                        lineHeight: 1.4,
+                        whiteSpace: 'pre-wrap'
+                      }}>
+                        {msg.content}
+                      </div>
+                    ))}
+                    {isChatLoading && (
+                      <div style={{
+                        alignSelf: 'flex-start',
+                        padding: '0.75rem 1rem',
+                        borderRadius: '16px 16px 16px 4px',
+                        background: '#f1f3f4',
+                        color: '#666'
+                      }}>
+                        ⏳ Thinking...
+                      </div>
+                    )}
                   </>
                 )}
               </div>
