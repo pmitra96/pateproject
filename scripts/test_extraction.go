@@ -22,7 +22,7 @@ func main() {
 
 	fmt.Printf("Testing PDF extraction: %s\n", filepath.Base(pdfPath))
 
-	result, err := extractor.ParseInvoice(pdfPath)
+	result, err := extractor.ParseImage(pdfPath)
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 		os.Exit(1)

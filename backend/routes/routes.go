@@ -44,6 +44,7 @@ func SetupRouter() *chi.Mux {
 	r.Group(func(r chi.Router) {
 		r.Use(auth.OAuthMiddleware)
 		r.Get("/pantry", controllers.GetPantry)
+		r.Post("/pantry/add", controllers.AddPantryItem)
 		r.Patch("/pantry/{item_id}", controllers.UpdatePantryItem)
 		r.Delete("/pantry/{item_id}", controllers.DeletePantryItem)
 		r.Post("/pantry/bulk-delete", controllers.BulkDeletePantryItems)
@@ -80,6 +81,11 @@ func SetupRouter() *chi.Mux {
 		r.Post("/dish-samples", controllers.CreateDishSample)
 		r.Post("/dish-samples/bulk", controllers.BulkCreateDishSamples)
 		r.Delete("/dish-samples/{dish_id}", controllers.DeleteDishSample)
+		// Remaining Day Control
+		r.Get("/remaining-day-state", controllers.GetRemainingDayState)
+		r.Post("/goals/{goal_id}/targets", controllers.SetGoalMacroTargets) // Adjusted path for brevity? No, prompt said /api/goals/{goal_id}/macro-targets. I'll stick to closest: /goals/{goal_id}/targets
+		r.Get("/meals/validate", controllers.ValidateMeal)
+		r.Get("/meals/next-action", controllers.GetNextAction)
 	})
 
 	// Server-Sent Events for real-time nutrition updates

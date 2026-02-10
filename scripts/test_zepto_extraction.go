@@ -18,7 +18,7 @@ func main() {
 	fmt.Println("Testing Zepto PDF extraction...")
 	fmt.Println("PDF Path:", pdfPath)
 
-	result, err := extractor.ParseInvoice(pdfPath)
+	result, err := extractor.ParseImage(pdfPath)
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 		os.Exit(1)

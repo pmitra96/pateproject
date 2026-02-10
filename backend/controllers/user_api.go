@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/pmitra96/pateproject/database"
+	"github.com/pmitra96/pateproject/jobs"
 	"github.com/pmitra96/pateproject/logger"
 	"github.com/pmitra96/pateproject/middleware"
 	"github.com/pmitra96/pateproject/models"
@@ -224,4 +225,84 @@ func BulkDeletePantryItems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func AddPantryItem(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserID(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		Name     string  `json:"name"`
+		Quantity float64 `json:"quantity"`
+		Unit     string  `json:"unit"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" || req.Quantity <= 0 {
+		http.Error(w, "Invalid input", http.StatusBadRequest)
+		return
+	}
+
+	// 1. Find or Create Ingredient
+	var ingredient models.Ingredient
+	if err := database.DB.Where("name = ?", req.Name).First(&ingredient).Error; err != nil {
+		ingredient = models.Ingredient{Name: req.Name}
+		database.DB.Create(&ingredient)
+	}
+
+	// 2. Find or Create Item (simple default item for manual entry)
+	var item models.Item
+	if err := database.DB.Where("name = ?", req.Name).First(&item).Error; err != nil {
+		// Create new item if not exists
+		item = models.Item{
+			Name:         req.Name,
+			IngredientID: ingredient.ID,
+			Unit:         req.Unit,
+		}
+		if err := database.DB.Create(&item).Error; err != nil {
+			http.Error(w, "Failed to create item", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// 3. Update or Create PantryItem
+	var pantryItem models.PantryItem
+	if err := database.DB.Where("user_id = ? AND ingredient_id = ?", userID, ingredient.ID).First(&pantryItem).Error; err == nil {
+		// Update existing
+		newQty := req.Quantity
+		if pantryItem.ManualQuantity != nil {
+			newQty += *pantryItem.ManualQuantity
+		} else {
+			newQty += pantryItem.DerivedQuantity
+		}
+		pantryItem.ManualQuantity = &newQty
+		database.DB.Save(&pantryItem)
+	} else {
+		// Create new
+		qty := req.Quantity
+		pantryItem = models.PantryItem{
+			UserID:         userID,
+			IngredientID:   ingredient.ID,
+			ItemID:         item.ID,
+			ManualQuantity: &qty,
+		}
+		database.DB.Create(&pantryItem)
+	}
+
+	// Trigger nutrition worker for the item
+	go func() {
+		// Small delay to ensure DB commit if transaction was used (here it's auto-commit but good practice)
+		// and mostly to not block response
+		jobs.GetWorker().Enqueue(item.ID)
+	}()
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(pantryItem)
 }

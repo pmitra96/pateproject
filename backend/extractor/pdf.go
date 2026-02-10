@@ -10,7 +10,7 @@ import (
 
 type ExtractedItem struct {
 	Name      string  `json:"name"`
-	Count     float64 `json:"count"`      // pieces from invoice (e.g. 1 unit)
+	Count     float64 `json:"count"`      // pieces from image (e.g. 1 unit)
 	UnitValue float64 `json:"unit_value"` // size of each (e.g. 500)
 	Unit      string  `json:"unit"`       // unit (e.g. g)
 }
@@ -86,7 +86,7 @@ func parseUnitAndValue(name string) (float64, string) {
 	return 1, "pcs"
 }
 
-func ParseInvoice(path string) (*ExtractionResult, error) {
+func ParseImage(path string) (*ExtractionResult, error) {
 	f, r, err := pdf.Open(path)
 	if err != nil {
 		return nil, err

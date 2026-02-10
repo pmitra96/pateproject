@@ -229,7 +229,7 @@ def extract_from_zepto(pdf_path: str) -> ExtractionResult:
 
 
 def extract_from_first_club(pdf_path: str) -> ExtractionResult:
-    """Extract items from First Club PDF invoice."""
+    """Extract items from First Club PDF Image."""
     logger.info("Starting First Club extraction")
     items = []
     

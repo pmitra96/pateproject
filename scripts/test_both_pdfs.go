@@ -8,7 +8,7 @@ import (
 
 func main() {
 	fmt.Println("=== Testing Blinkit PDF ===")
-	result, err := extractor.ParseInvoice("../blinkit.pdf")
+	result, err := extractor.ParseImage("../blinkit.pdf")
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 		return
@@ -22,7 +22,7 @@ func main() {
 	}
 
 	fmt.Println("\n=== Testing Zepto PDF ===")
-	result2, err := extractor.ParseInvoice("../zepto.pdf")
+	result2, err := extractor.ParseImage("../zepto.pdf")
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 		return

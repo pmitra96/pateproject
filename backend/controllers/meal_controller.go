@@ -18,6 +18,7 @@ type LogMealRequest struct {
 	Ingredients []string `json:"ingredients"`
 	Calories    float64  `json:"calories"`
 	Protein     float64  `json:"protein"`
+	WasOverride bool     `json:"was_override"`
 }
 
 type LogMealResponse struct {
@@ -90,21 +91,49 @@ func LogMeal(w http.ResponseWriter, r *http.Request) {
 	// Save ingredients as JSON
 	ingredientsJSON, _ := json.Marshal(req.Ingredients)
 
+	// Determine pre-log control mode
+	preState, _ := ComputeRemainingDayState(userID, time.Now())
+	controlModeAtLog := "NORMAL"
+	if preState != nil {
+		controlModeAtLog = preState.ControlMode
+	}
+
 	// Create meal log entry
 	mealLog := models.MealLog{
-		UserID:      userID,
-		Name:        req.Name,
-		Calories:    totalCalories,
-		Protein:     totalProtein,
-		Carbs:       totalCarbs,
-		Fat:         totalFat,
-		Fiber:       totalFiber,
-		Ingredients: string(ingredientsJSON),
-		LoggedAt:    time.Now(),
+		UserID:             userID,
+		Name:               req.Name,
+		Calories:           totalCalories,
+		Protein:            totalProtein,
+		Carbs:              totalCarbs,
+		Fat:                totalFat,
+		Fiber:              totalFiber,
+		Ingredients:        string(ingredientsJSON),
+		LoggedAt:           time.Now(),
+		WasOverride:        req.WasOverride,
+		ControlModeAtLog:   controlModeAtLog,
+		WasSystemSuggested: false, // Default for manual log
 	}
 	database.DB.Create(&mealLog)
 
 	logger.Info("Meal logged to history", "meal_log_id", mealLog.ID, "calories", totalCalories, "protein", totalProtein)
+
+	// Compute post-log state
+	newState, _ := ComputeRemainingDayState(userID, time.Now())
+
+	// Determine next action
+	nextAction := map[string]interface{}{}
+	if newState != nil {
+		if newState.ControlMode == "DAMAGE_CONTROL" {
+			nextAction["type"] = "stop_eating"
+			nextAction["message"] = "Daily targets exceeded. Minimize further intake."
+		} else {
+			nextAction["type"] = "meal_suggestion"
+			nextAction["meal"] = map[string]interface{}{
+				"name":     "Suggested Meal", // Placeholder
+				"calories": 400,
+			}
+		}
+	}
 
 	resp := struct {
 		Status    string   `json:"status"`
@@ -118,11 +147,15 @@ func LogMeal(w http.ResponseWriter, r *http.Request) {
 			Fat      float64 `json:"fat"`
 			Fiber    float64 `json:"fiber"`
 		} `json:"macros"`
+		RemainingState *models.RemainingDayState `json:"remaining_state"`
+		NextAction     map[string]interface{}    `json:"next_action"`
 	}{
-		Status:    "success",
-		Message:   "Meal logged successfully",
-		Updated:   updatedItems,
-		MealLogID: mealLog.ID,
+		Status:         "success",
+		Message:        "Meal logged successfully",
+		Updated:        updatedItems,
+		MealLogID:      mealLog.ID,
+		RemainingState: newState,
+		NextAction:     nextAction,
 	}
 	resp.Macros.Calories = totalCalories
 	resp.Macros.Protein = totalProtein
@@ -347,6 +380,9 @@ func DeleteMealLog(w http.ResponseWriter, r *http.Request) {
 
 	// Delete the meal log
 	database.DB.Delete(&mealLog)
+
+	// Trigger re-computation of state (to potentially exit TIGHT/DAMAGE_CONTROL)
+	ComputeRemainingDayState(userID, time.Now())
 
 	logger.Info("Meal log deleted and pantry restored", "meal_log_id", mealLogID, "restored_items", len(restoredItems))
 

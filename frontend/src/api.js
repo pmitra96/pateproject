@@ -57,7 +57,7 @@ export const fetchLowStock = async () => {
 
 export const extractItems = async (file) => {
   const formData = new FormData();
-  formData.append('invoice', file);
+  formData.append('image', file);
 
   const response = await fetch(`${API_BASE}/items/extract`, {
     method: 'POST',
@@ -147,6 +147,7 @@ export const deleteGoal = async (goalId) => {
   if (!res.ok) throw new Error('Failed to delete goal');
 };
 
+
 export const logMeal = async (meal) => {
   const res = await fetch(`${API_BASE}/meals/log`, {
     method: 'POST',
@@ -158,12 +159,23 @@ export const logMeal = async (meal) => {
       name: meal.name,
       ingredients: meal.ingredients,
       calories: meal.calories,
-      protein: meal.protein
+      protein: meal.protein,
+      was_override: meal.was_override
     })
   });
+
+  if (res.status === 403) {
+    const data = await res.json();
+    const err = new Error(data.error || 'Meal blocked');
+    err.status = 403;
+    err.reason = data.blocked_reason;
+    throw err;
+  }
+
   if (!res.ok) throw new Error('Failed to log meal');
   return res.json();
 };
+
 
 export const fetchMealHistory = async () => {
   const res = await fetch(`${API_BASE}/meals`, {
@@ -258,5 +270,66 @@ export const createDishSamplesBulk = async (dishes) => {
     body: JSON.stringify(dishes)
   });
   if (!res.ok) throw new Error('Failed to create dish samples');
+  return res.json();
+};
+
+export const addPantryItem = async (name, quantity, unit) => {
+  const res = await fetch(`${API_BASE}/pantry/add`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify({ name, quantity, unit })
+  });
+  if (!res.ok) throw new Error('Failed to add pantry item');
+  return res.json();
+};
+
+export const fetchRemainingDayState = async () => {
+  const res = await fetch(`${API_BASE}/remaining-day-state`, {
+    headers: getAuthHeader()
+  });
+  if (!res.ok) {
+    if (res.status === 404) return null;
+    const err = await res.json().catch(() => ({}));
+    if (err.status === "no_targets") return null;
+    throw new Error('Failed to fetch remaining day state');
+  }
+  const data = await res.json();
+  if (data.status === "no_targets") return null;
+  return data;
+};
+
+export const setGoalMacroTargets = async (goalId, targets) => {
+  const res = await fetch(`${API_BASE}/goals/${goalId}/targets`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader()
+    },
+    body: JSON.stringify(targets)
+  });
+  if (!res.ok) throw new Error('Failed to set targets');
+  return res.json();
+};
+
+export const validateMeal = async (macros) => {
+  const params = new URLSearchParams();
+  if (macros.calories) params.append('calories', macros.calories);
+  if (macros.protein) params.append('protein', macros.protein);
+
+  const res = await fetch(`${API_BASE}/meals/validate?${params.toString()}`, {
+    headers: getAuthHeader()
+  });
+  if (!res.ok) throw new Error('Failed to validate meal');
+  return res.json();
+};
+
+export const fetchNextAction = async () => {
+  const res = await fetch(`${API_BASE}/meals/next-action`, {
+    headers: getAuthHeader()
+  });
+  if (!res.ok) throw new Error('Failed to fetch next action');
   return res.json();
 };

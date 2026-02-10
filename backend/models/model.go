@@ -144,19 +144,22 @@ type Goal struct {
 
 // MealLog represents a logged meal with nutrition totals.
 type MealLog struct {
-	ID          uint           `gorm:"primaryKey" json:"id"`
-	UserID      uint           `gorm:"not null;index" json:"user_id"`
-	Name        string         `gorm:"size:255;not null" json:"name"`
-	Calories    float64        `gorm:"default:0" json:"calories"`
-	Protein     float64        `gorm:"default:0" json:"protein"`
-	Carbs       float64        `gorm:"default:0" json:"carbs"`
-	Fat         float64        `gorm:"default:0" json:"fat"`
-	Fiber       float64        `gorm:"default:0" json:"fiber"`
-	Ingredients string         `gorm:"type:text" json:"ingredients"` // JSON array of ingredients with quantities
-	LoggedAt    time.Time      `json:"logged_at"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	ID                 uint           `gorm:"primaryKey" json:"id"`
+	UserID             uint           `gorm:"not null;index" json:"user_id"`
+	Name               string         `gorm:"size:255;not null" json:"name"`
+	Calories           float64        `gorm:"default:0" json:"calories"`
+	Protein            float64        `gorm:"default:0" json:"protein"`
+	Carbs              float64        `gorm:"default:0" json:"carbs"`
+	Fat                float64        `gorm:"default:0" json:"fat"`
+	Fiber              float64        `gorm:"default:0" json:"fiber"`
+	Ingredients        string         `gorm:"type:text" json:"ingredients"` // JSON array of ingredients with quantities
+	LoggedAt           time.Time      `json:"logged_at"`
+	WasSystemSuggested bool           `gorm:"default:false" json:"was_system_suggested"`
+	WasOverride        bool           `gorm:"default:false" json:"was_override"`
+	ControlModeAtLog   string         `gorm:"size:20" json:"control_mode_at_log"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	DeletedAt          gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // Conversation stores chat conversation summaries for users
@@ -185,16 +188,58 @@ type UserPreferences struct {
 
 // DishSample stores sample dishes based on cuisine and location
 type DishSample struct {
-	ID                      uint           `gorm:"primaryKey" json:"id"`
-	Cuisine                 string         `gorm:"size:100;index" json:"cuisine"`
-	Region                  string         `gorm:"size:100;index" json:"region"`
-	Dish                    string         `gorm:"size:255;not null" json:"dish"`
-	Details                 string         `gorm:"type:text" json:"details"`
-	Ingredients             string         `gorm:"type:text" json:"ingredients"`               // JSON array
-	Process                 string         `gorm:"type:text" json:"process"`                   // JSON array
-	CalorificValuePerServing string        `gorm:"size:100" json:"calorific_value_per_serving"`
-	Benefits                string         `gorm:"type:text" json:"benefits"`                  // JSON array
-	CreatedAt               time.Time      `json:"created_at"`
-	UpdatedAt               time.Time      `json:"updated_at"`
-	DeletedAt               gorm.DeletedAt `gorm:"index" json:"-"`
+	ID                       uint           `gorm:"primaryKey" json:"id"`
+	Cuisine                  string         `gorm:"size:100;index" json:"cuisine"`
+	Region                   string         `gorm:"size:100;index" json:"region"`
+	Dish                     string         `gorm:"size:255;not null" json:"dish"`
+	Details                  string         `gorm:"type:text" json:"details"`
+	Ingredients              string         `gorm:"type:text" json:"ingredients"` // JSON array
+	Process                  string         `gorm:"type:text" json:"process"`     // JSON array
+	CalorificValuePerServing string         `gorm:"size:100" json:"calorific_value_per_serving"`
+	Benefits                 string         `gorm:"type:text" json:"benefits"` // JSON array
+	CreatedAt                time.Time      `json:"created_at"`
+	UpdatedAt                time.Time      `json:"updated_at"`
+	DeletedAt                gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// RemainingDayState tracks the user's remaining nutrition budget for a specific date.
+type RemainingDayState struct {
+	ID                uint      `gorm:"primaryKey" json:"id"`
+	UserID            uint      `gorm:"not null;uniqueIndex:idx_user_date" json:"user_id"`
+	Date              time.Time `gorm:"not null;type:date;uniqueIndex:idx_user_date" json:"date"`
+	RemainingCalories float64   `gorm:"not null" json:"remaining_calories"`
+	RemainingProtein  float64   `gorm:"not null" json:"remaining_protein"`
+	RemainingFat      float64   `gorm:"not null" json:"remaining_fat"`
+	RemainingCarbs    float64   `gorm:"not null" json:"remaining_carbs"`
+	MealsRemaining    int       `gorm:"not null" json:"meals_remaining"`
+	ControlMode       string    `gorm:"size:20;not null" json:"control_mode"` // NORMAL, TIGHT, DAMAGE_CONTROL
+	LastComputedAt    time.Time `json:"last_computed_at"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// GoalMacroProfile defines specific macro targets for a user's goal.
+type GoalMacroProfile struct {
+	ID                         uint      `gorm:"primaryKey" json:"id"`
+	GoalID                     uint      `gorm:"not null;uniqueIndex" json:"goal_id"`
+	DailyCalorieTarget         int       `gorm:"not null" json:"daily_calorie_target"`
+	DailyProteinTarget         float64   `gorm:"not null" json:"daily_protein_target"`
+	DailyFatTarget             float64   `gorm:"not null" json:"daily_fat_target"`
+	DailyCarbsTarget           float64   `gorm:"not null" json:"daily_carbs_target"`
+	MacroPriorityOrder         string    `gorm:"type:text" json:"macro_priority_order"` // JSON string
+	DamageControlFloorCalories int       `gorm:"default:300" json:"damage_control_floor_calories"`
+	CreatedAt                  time.Time `json:"created_at"`
+	UpdatedAt                  time.Time `json:"updated_at"`
+}
+
+// ControlModeTransition logs changes in control mode for audit and analytics.
+type ControlModeTransition struct {
+	ID                            uint      `gorm:"primaryKey" json:"id"`
+	UserID                        uint      `gorm:"not null;index" json:"user_id"`
+	Date                          time.Time `gorm:"not null;type:date" json:"date"`
+	FromMode                      string    `gorm:"size:20" json:"from_mode"`
+	ToMode                        string    `gorm:"size:20;not null" json:"to_mode"`
+	TriggerMealID                 *uint     `json:"trigger_meal_id"`
+	RemainingCaloriesAtTransition float64   `json:"remaining_calories_at_transition"`
+	CreatedAt                     time.Time `json:"created_at"`
 }
