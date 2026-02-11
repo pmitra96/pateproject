@@ -10,4 +10,7 @@
 - **Sanity Check**:
     - if you identify a case that you missed dont just fix that case, make sure that you have fixed all the cases.
     make sure that your code did not cause any regressions for that use-case.
+
+- **Feature Addition CheckList**:
+    - after every feature addition, make sure to update the current_state.md file. [this is non negotiable].
     

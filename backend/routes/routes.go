@@ -85,7 +85,7 @@ func SetupRouter() *chi.Mux {
 		r.Get("/remaining-day-state", controllers.GetRemainingDayState)
 		r.Post("/goals/{goal_id}/targets", controllers.SetGoalMacroTargets) // Adjusted path for brevity? No, prompt said /api/goals/{goal_id}/macro-targets. I'll stick to closest: /goals/{goal_id}/targets
 		r.Get("/meals/validate", controllers.ValidateMeal)
-		r.Get("/meals/next-action", controllers.GetNextAction)
+
 	})
 
 	// Server-Sent Events for real-time nutrition updates

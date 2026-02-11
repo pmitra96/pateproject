@@ -120,21 +120,6 @@ func LogMeal(w http.ResponseWriter, r *http.Request) {
 	// Compute post-log state
 	newState, _ := ComputeRemainingDayState(userID, time.Now())
 
-	// Determine next action
-	nextAction := map[string]interface{}{}
-	if newState != nil {
-		if newState.ControlMode == "DAMAGE_CONTROL" {
-			nextAction["type"] = "stop_eating"
-			nextAction["message"] = "Daily targets exceeded. Minimize further intake."
-		} else {
-			nextAction["type"] = "meal_suggestion"
-			nextAction["meal"] = map[string]interface{}{
-				"name":     "Suggested Meal", // Placeholder
-				"calories": 400,
-			}
-		}
-	}
-
 	resp := struct {
 		Status    string   `json:"status"`
 		Message   string   `json:"message"`
@@ -148,14 +133,12 @@ func LogMeal(w http.ResponseWriter, r *http.Request) {
 			Fiber    float64 `json:"fiber"`
 		} `json:"macros"`
 		RemainingState *models.RemainingDayState `json:"remaining_state"`
-		NextAction     map[string]interface{}    `json:"next_action"`
 	}{
 		Status:         "success",
 		Message:        "Meal logged successfully",
 		Updated:        updatedItems,
 		MealLogID:      mealLog.ID,
 		RemainingState: newState,
-		NextAction:     nextAction,
 	}
 	resp.Macros.Calories = totalCalories
 	resp.Macros.Protein = totalProtein

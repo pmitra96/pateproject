@@ -24,13 +24,21 @@ import {
   fetchRemainingDayState,
   setGoalMacroTargets,
   // validateMeal,
-  fetchNextAction
+
 } from './api';
 
 import RemainingDayPanel from './components/RemainingDayPanel';
-import NextActionCard from './components/NextActionCard';
+
 import MealBlockedBanner from './components/MealBlockedBanner';
 import MacroTargetModal from './components/MacroTargetModal';
+
+const getDefaultMealType = () => {
+  const hour = new Date().getHours();
+  if (hour >= 5 && hour < 12) return 'Breakfast';
+  if (hour >= 12 && hour < 17) return 'Lunch';
+  if (hour >= 17 && hour < 21) return 'Dinner';
+  return 'Snack';
+};
 
 function App() {
   const [pantry, setPantry] = useState([]);
@@ -55,13 +63,14 @@ function App() {
   const [newGoalDescription, setNewGoalDescription] = useState('');
   const [viewingNutritionItem, setViewingNutritionItem] = useState(null);
   const [selectedMeal, setSelectedMeal] = useState(null);
+  const [selectedMealType, setSelectedMealType] = useState(getDefaultMealType()); // Smart default based on time
   const [isLoggingMeal, setIsLoggingMeal] = useState(false);
   const [mealHistory, setMealHistory] = useState([]);
 
 
   // Remaining Day Control State
   const [remainingDayState, setRemainingDayState] = useState(null);
-  const [nextAction, setNextAction] = useState(null);
+
   const [showTargetModal, setShowTargetModal] = useState(false);
   const [targetModalGoalId, setTargetModalGoalId] = useState(null);
 
@@ -233,12 +242,7 @@ function App() {
       const state = await fetchRemainingDayState();
       setRemainingDayState(state);
       // Also fetch next action if state exists
-      if (state) {
-        const action = await fetchNextAction();
-        setNextAction(action);
-      } else {
-        setNextAction(null);
-      }
+
     } catch (err) {
       console.error("Failed to load remaining day state", err);
     }
@@ -410,13 +414,6 @@ function App() {
     item.item.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const getTimeOfDay = () => {
-    const hour = new Date().getHours();
-    if (hour >= 5 && hour < 12) return 'morning';
-    if (hour >= 12 && hour < 17) return 'afternoon';
-    if (hour >= 17 && hour < 21) return 'evening';
-    return 'night';
-  };
 
   const handleSuggestMeal = async () => {
     if (pantry.length === 0) {
@@ -434,7 +431,8 @@ function App() {
         title: g.title,
         description: g.description || ''
       }));
-      const result = await suggestMealPersonalized(inventory, goalsForLLM, getTimeOfDay());
+      // Use selectedMealType instead of getTimeOfDay()
+      const result = await suggestMealPersonalized(inventory, goalsForLLM, selectedMealType);
       setMealSuggestions(result.suggestions);
     } catch (err) {
       console.error('Failed to get meal suggestions', err);
@@ -594,13 +592,6 @@ function App() {
 
       if (response.remaining_state) {
         setRemainingDayState(response.remaining_state);
-        // If state mandates next action, use it
-        if (response.next_action) {
-          setNextAction(response.next_action);
-        } else {
-          // Fallback fetch if not provided
-          loadState();
-        }
       } else {
         loadState(); // Fallback
       }
@@ -677,20 +668,21 @@ function App() {
             </div>
           )}
 
-          {nextAction && (
-            <NextActionCard
-              action={nextAction}
-              onLog={(meal) => {
-                setSelectedMeal({ ...meal, benefits: "Recommended to meet your daily targets." });
-              }}
-              onOverride={() => setActiveTab('log-meal')}
-              onDone={() => setNextAction(null)}
-            />
-          )}
 
-          {/* Suggest Meal Button */}
+
+          {/* Suggest Meal Button and Type Selection */}
           {user && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '1rem', gap: '0.5rem' }}>
+              <select
+                value={selectedMealType}
+                onChange={(e) => setSelectedMealType(e.target.value)}
+                style={{ padding: '0.5rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--glass-bg)', color: 'var(--text-color)' }}
+              >
+                <option value="Breakfast">Breakfast</option>
+                <option value="Lunch">Lunch</option>
+                <option value="Dinner">Dinner</option>
+                <option value="Snack">Snack</option>
+              </select>
               <button
                 className="btn"
                 onClick={handleSuggestMeal}
@@ -1094,9 +1086,7 @@ function App() {
 
       {activeTab === 'nutrition' && (
         <section>
-          {remainingDayState && (
-            <RemainingDayPanel state={remainingDayState} />
-          )}
+
 
           {!user ? (
             <div className="glass-panel p-6 text-secondary" style={{ textAlign: 'center' }}>Please log in to view nutrition insights.</div>

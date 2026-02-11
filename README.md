@@ -123,7 +123,7 @@ A smart pantry management system that automatically tracks grocery orders from Z
 ### Extraction
 - `POST /items/extract` - Extract items from PDF receipt
   - Requires: `Authorization: Bearer <token>`
-  - Body: `multipart/form-data` with `invoice` file
+  - Body: `multipart/form-data` with `image` file
 
 ### Ingestion
 - `POST /ingest/order` - Ingest order data
@@ -215,7 +215,7 @@ curl -X POST http://localhost:8081/extract \
 # Test via Go backend
 curl -X POST http://localhost:8080/items/extract \
   -H "Authorization: Bearer test-token" \
-  -F "invoice=@zepto.pdf"
+  -F "image=@zepto.pdf"
 ```
 
 ## Environment Variables
