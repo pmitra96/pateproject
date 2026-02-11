@@ -326,10 +326,4 @@ export const validateMeal = async (macros) => {
   return res.json();
 };
 
-export const fetchNextAction = async () => {
-  const res = await fetch(`${API_BASE}/meals/next-action`, {
-    headers: getAuthHeader()
-  });
-  if (!res.ok) throw new Error('Failed to fetch next action');
-  return res.json();
-};
+

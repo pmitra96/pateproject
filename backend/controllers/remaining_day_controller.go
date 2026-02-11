@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"encoding/json"
-	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -222,46 +221,6 @@ func SetGoalMacroTargets(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "success"})
-}
-
-// GetNextAction returns a suggestion based on current state
-func GetNextAction(w http.ResponseWriter, r *http.Request) {
-	userID, err := getUserID(r)
-	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	state, err := ComputeRemainingDayState(userID, time.Now())
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	if state == nil {
-		http.Error(w, "No active goal/targets", http.StatusBadRequest)
-		return
-	}
-
-	response := map[string]interface{}{}
-
-	if state.ControlMode == "DAMAGE_CONTROL" {
-		response["action_type"] = "stop_eating"
-		response["message"] = "Daily targets exceeded. Minimize further intake."
-		// Could suggest minimal snack
-	} else {
-		response["action_type"] = "meal_suggestion"
-		// Suggest a generic meal fitting remaining macros
-		//Ideally call LLM here, but for now placeholder
-		response["meal"] = map[string]interface{}{
-			"name":     "Suggested Meal",
-			"calories": math.Min(state.RemainingCalories, 600), // Cap reasonable meal size
-			"protein":  state.RemainingProtein / float64(state.MealsRemaining),
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
 }
 
 // ValidateMeal checks if a meal is allowed

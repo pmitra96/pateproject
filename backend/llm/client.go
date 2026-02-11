@@ -389,15 +389,20 @@ func (c *Client) SuggestMealsPersonalized(inventory []InventoryItem, goals []Goa
 
 	// Time context
 	mealType := "meal"
-	switch timeOfDay {
-	case "morning":
+	lowerTime := strings.ToLower(timeOfDay)
+	switch lowerTime {
+	case "morning", "breakfast":
 		mealType = "breakfast"
-	case "afternoon":
+	case "afternoon", "lunch":
 		mealType = "lunch"
-	case "evening":
+	case "evening", "dinner":
 		mealType = "dinner"
-	case "night":
+	case "night", "snack", "light snack":
 		mealType = "light snack"
+	default:
+		// If it's a specific meal type passed directly, use it
+		// This covers "snack", "brunch", etc. if passed explicitly
+		mealType = lowerTime
 	}
 
 	prompt := fmt.Sprintf(`Based on these ingredients in my pantry:
@@ -459,10 +464,10 @@ Set "confidence" (1-10) based on how well you followed the quality guidelines.`,
 
 	// Step 2: Check confidence - only refine if low confidence (<7)
 	if !strings.Contains(initialResponse, `"confidence"`) ||
-	   strings.Contains(initialResponse, `"confidence": 9`) ||
-	   strings.Contains(initialResponse, `"confidence": 10`) ||
-	   strings.Contains(initialResponse, `"confidence": 8`) ||
-	   strings.Contains(initialResponse, `"confidence": 7`) {
+		strings.Contains(initialResponse, `"confidence": 9`) ||
+		strings.Contains(initialResponse, `"confidence": 10`) ||
+		strings.Contains(initialResponse, `"confidence": 8`) ||
+		strings.Contains(initialResponse, `"confidence": 7`) {
 		// High confidence, return as-is
 		return initialResponse, nil
 	}
