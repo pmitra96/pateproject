@@ -211,11 +211,18 @@ type RemainingDayState struct {
 	RemainingProtein  float64   `gorm:"not null" json:"remaining_protein"`
 	RemainingFat      float64   `gorm:"not null" json:"remaining_fat"`
 	RemainingCarbs    float64   `gorm:"not null" json:"remaining_carbs"`
-	MealsRemaining    int       `gorm:"not null" json:"meals_remaining"`
-	ControlMode       string    `gorm:"size:20;not null" json:"control_mode"` // NORMAL, TIGHT, DAMAGE_CONTROL
-	LastComputedAt    time.Time `json:"last_computed_at"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+
+	// Targets for the day (snapshot)
+	TargetCalories float64 `gorm:"default:0" json:"target_calories"`
+	TargetProtein  float64 `gorm:"default:0" json:"target_protein"`
+	TargetFat      float64 `gorm:"default:0" json:"target_fat"`
+	TargetCarbs    float64 `gorm:"default:0" json:"target_carbs"`
+
+	MealsRemaining int       `gorm:"not null" json:"meals_remaining"`
+	ControlMode    string    `gorm:"size:20;not null" json:"control_mode"` // NORMAL, TIGHT, DAMAGE_CONTROL
+	LastComputedAt time.Time `json:"last_computed_at"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // GoalMacroProfile defines specific macro targets for a user's goal.

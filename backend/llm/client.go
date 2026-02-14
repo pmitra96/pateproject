@@ -123,6 +123,11 @@ type InventoryItem struct {
 	Name     string  `json:"name"`
 	Quantity float64 `json:"quantity"`
 	Unit     string  `json:"unit"`
+	// Nutrition per 100g/ml or per unit
+	Calories float64 `json:"calories"`
+	Protein  float64 `json:"protein"`
+	Fat      float64 `json:"fat"`
+	Carbs    float64 `json:"carbs"`
 }
 
 type PantryItemExtraction struct {
@@ -287,39 +292,31 @@ type DishSampleInfo struct {
 }
 
 func (c *Client) SuggestMeals(inventory []InventoryItem) (string, error) {
-	if len(inventory) == 0 {
-		return "", fmt.Errorf("no inventory items provided")
-	}
-
-	// Build inventory list for prompt
-	var items string
+	items := ""
 	for _, item := range inventory {
-		items += fmt.Sprintf("- %s: %.0f %s\n", item.Name, item.Quantity, item.Unit)
+		items += fmt.Sprintf("- %s: %.2f %s\n", item.Name, item.Quantity, item.Unit)
 	}
 
-	prompt := fmt.Sprintf(`Based on these ingredients in my pantry:
-
+	prompt := fmt.Sprintf(`I have the following ingredients in my pantry:
 %s
 
-Suggest 3 meals I can make.
+Suggest 3 meals I can cook using these ingredients. You can assume I have basic spices (salt, pepper, oil, turmeric, chili powder).
+For each meal, provide:
+1. Name
+2. Ingredients needed (with quantities)
+3. Brief instructions
+4. Estimated calories and protein per serving
 
-IMPORTANT RULES:
-1. Portions MUST be for exactly 1 person (one serving).
-2. Each ingredient must include a weight or quantity (e.g., "100g Paneer", "2 Eggs").
+Format the output as a JSON list of objects with keys: "name", "ingredients" (list of strings), "instructions", "calories" (number), "protein" (number).`, items)
 
-For each meal:
-1. Name of the dish
-2. Which ingredients from my pantry it uses (with specific weight/quantity)
-3. Brief cooking instructions (2-3 sentences)
-
-Format each meal clearly with the dish name as a header.`, items)
-
-	messages := []Message{
-		{Role: "system", Content: "You are a helpful cooking assistant. Suggest practical, easy-to-make meals based on available ingredients."},
+	resp, err := c.Chat([]Message{
+		{Role: "system", Content: "You are a grocery data expert. You specialize in normalizing item names into canonical ingredients and brands. Always return valid JSON only."},
 		{Role: "user", Content: prompt},
+	})
+	if err != nil {
+		return "", err
 	}
-
-	return c.Chat(messages)
+	return resp, nil
 }
 
 func (c *Client) SuggestMealsPersonalized(inventory []InventoryItem, goals []GoalInfo, timeOfDay string, preferences *UserPreferencesInfo, dishSamples []DishSampleInfo) (string, error) {
@@ -413,7 +410,10 @@ func (c *Client) SuggestMealsPersonalized(inventory []InventoryItem, goals []Goa
 Suggest 3 %s options that align with my goals and preferred cuisines.
 
 IMPORTANT QUALITY GUIDELINES - Self-evaluate before responding:
-- Use AUTHENTIC dish names from the user's preferred cuisines (reference the dish samples provided)
+- Use AUTHENTIC dish names, BUT they must match the ingredients.
+- **CRITICAL**: The dish name MUST reflect the actual main ingredients used.
+- **Strictly Forbidden**: Do NOT use traditional names that imply ingredients (especially meats) not present in the list.
+- If a traditional recipe uses a substitute (e.g. Tofu instead of Meat), the name MUST change to reflect the substitute.
 - Ensure cooking instructions are REALISTIC and detailed
 - Calorie estimates must be ACCURATE for portion sizes
 - Protein values must match the actual ingredients used
@@ -423,6 +423,13 @@ IMPORTANT RULES:
 1. All meal portions MUST be calculated for EXACTLY 1 serving (for one person).
 2. Each ingredient in the "ingredients" list must include a specific weight/quantity (e.g., "150g Chicken breast", "2 Eggs", "1 cup Rice").
 3. If dish samples are provided, use them as inspiration for authentic dish names and preparation methods.
+4. **CRITICAL - RECIPE FIRST APPROACH**: 
+    a. First, decide on a standard, authentic single-serving recipe. (e.g., "I need 1 Capsicum and 100g Paneer").
+    b. Ignore the *Total Quantity* I have in stock (e.g., if I have 55 capsicums, do NOT use 55. Use only 1).
+    c. THEN, find the nutrition density of that item from my list (e.g., "Capsicum: 20kcal/pc").
+    d. Multiply your recipe amount by the nutrition density (e.g. 1 pc * 20kcal/pc = 20kcal).
+5. **CRITICAL**: Calculate the total calories, protein, fat, and carbs by SUMMING these specific calculated values. Do NOT guess generic values. Use the data provided.
+6. **NAMING CONVENTION**: The dish name must be descriptive of the *ingredients actually present*. (e.g. "Spicy [Main Ingredient] Curry", not just "Spicy Curry" or the name of a meat dish if no meat is used).
 
 IMPORTANT: Return ONLY valid JSON in this exact format, no other text:
 {
@@ -438,6 +445,8 @@ IMPORTANT: Return ONLY valid JSON in this exact format, no other text:
       "prep_time": "10 mins",
       "calories": 250,
       "protein": 15,
+      "fat": 10,
+      "carbs": 30,
       "benefits": "How this helps achieve the goal"
     }
   ]

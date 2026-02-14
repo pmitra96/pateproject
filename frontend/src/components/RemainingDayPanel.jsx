@@ -8,6 +8,10 @@ const RemainingDayPanel = ({ state }) => {
         remaining_protein,
         remaining_fat,
         remaining_carbs,
+        target_calories,  // New field
+        target_protein,   // New field
+        target_fat,       // New field
+        target_carbs,     // New field
         control_mode,
         meals_remaining
     } = state;
@@ -30,6 +34,24 @@ const RemainingDayPanel = ({ state }) => {
         }
     };
 
+    // Helper to render macro bars
+    // target might be 0 if old state, handle gracefully
+    const renderMacro = (label, remaining, target, color) => {
+        const safeTarget = target || 1; // avoid div by zero
+        const consumed = safeTarget - remaining;
+        const percentConsumed = Math.min(100, Math.max(0, (consumed / safeTarget) * 100));
+
+        return (
+            <MacroBar
+                label={label}
+                remaining={remaining}
+                target={target}
+                percentConsumed={percentConsumed}
+                color={color}
+            />
+        );
+    };
+
     return (
         <div className="glass-panel p-4 mb-6" style={{ borderLeft: `4px solid ${getBadgeColor(control_mode)}` }}>
             <div className="flex-between mb-4">
@@ -48,29 +70,38 @@ const RemainingDayPanel = ({ state }) => {
                 <div style={{ fontSize: '2rem', fontWeight: 700, color: remaining_calories < 0 ? '#ef4444' : 'var(--text-primary)' }}>
                     {Math.round(remaining_calories)} <span style={{ fontSize: '1rem', fontWeight: 400, color: 'var(--text-secondary)' }}>kcal left</span>
                 </div>
+                {target_calories > 0 && (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                        {Math.round(((target_calories - remaining_calories) / target_calories) * 100)}% of daily budget used
+                    </div>
+                )}
             </div>
 
             <div className="grid grid-cols-3 gap-4">
-                <MacroBar label="Protein" val={remaining_protein} color="#3b82f6" />
-                <MacroBar label="Carbs" val={remaining_carbs} color="#10b981" />
-                <MacroBar label="Fat" val={remaining_fat} color="#f59e0b" />
+                {renderMacro("Protein", remaining_protein, target_protein, "#3b82f6")}
+                {renderMacro("Carbs", remaining_carbs, target_carbs, "#10b981")}
+                {renderMacro("Fat", remaining_fat, target_fat, "#f59e0b")}
             </div>
         </div>
     );
 };
 
-const MacroBar = ({ label, val, color }) => (
+const MacroBar = ({ label, remaining, target, percentConsumed, color }) => (
     <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
             <span>{label}</span>
-            <span style={{ fontWeight: 600 }}>{Math.round(val)}g</span>
+            <span style={{ fontWeight: 600 }}>{Math.round(remaining)}g left</span>
         </div>
         <div style={{ height: '6px', background: '#e5e7eb', borderRadius: '3px', overflow: 'hidden' }}>
             <div style={{
                 height: '100%',
                 background: color,
-                width: val > 0 ? '100%' : '0%'
+                width: `${percentConsumed}%`,
+                transition: 'width 0.3s ease'
             }} />
+        </div>
+        <div style={{ textAlign: 'right', fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+            {Math.round(percentConsumed)}% used
         </div>
     </div>
 );

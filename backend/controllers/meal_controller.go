@@ -18,6 +18,8 @@ type LogMealRequest struct {
 	Ingredients []string `json:"ingredients"`
 	Calories    float64  `json:"calories"`
 	Protein     float64  `json:"protein"`
+	Fat         float64  `json:"fat"`
+	Carbs       float64  `json:"carbs"`
 	WasOverride bool     `json:"was_override"`
 }
 
@@ -44,8 +46,17 @@ func LogMeal(w http.ResponseWriter, r *http.Request) {
 
 	updatedItems := []string{}
 
-	// Track macros for the meal
+	// Track macros for the meal - use PROVIDED values only
+	// Track macros for the meal - use PROVIDED values only
+	// The user explicitly requested to NEVER sum up from pantry items.
 	var totalCalories, totalProtein, totalCarbs, totalFat, totalFiber float64
+
+	totalCalories = req.Calories
+	totalProtein = req.Protein
+	totalFat = req.Fat
+	totalCarbs = req.Carbs
+	totalFat = req.Fat
+	totalCarbs = req.Carbs
 
 	// Parse each ingredient and reduce pantry quantity
 	// Ingredients are in format like "100g Paneer", "2 Eggs", "1 cup Rice"
@@ -63,16 +74,6 @@ func LogMeal(w http.ResponseWriter, r *http.Request) {
 			if matchesIngredient(pi.Ingredient.Name, ingredientName) {
 				// Convert quantity to base units if needed
 				reduction := convertToBaseUnit(quantity, unit, pi.Ingredient.Name)
-
-				// Calculate macros based on the item's nutrition per 100g/ml
-				if pi.Item.ID > 0 {
-					factor := reduction / 100.0 // Nutrition is per 100g
-					totalCalories += pi.Item.Calories * factor
-					totalProtein += pi.Item.Protein * factor
-					totalCarbs += pi.Item.Carbs * factor
-					totalFat += pi.Item.Fat * factor
-					totalFiber += pi.Item.Fiber * factor
-				}
 
 				// Reduce the quantity
 				newQty := pi.DerivedQuantity - reduction

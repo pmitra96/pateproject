@@ -160,6 +160,8 @@ export const logMeal = async (meal) => {
       ingredients: meal.ingredients,
       calories: meal.calories,
       protein: meal.protein,
+      fat: meal.fat,
+      carbs: meal.carbs,
       was_override: meal.was_override
     })
   });
@@ -283,6 +285,20 @@ export const addPantryItem = async (name, quantity, unit) => {
     body: JSON.stringify({ name, quantity, unit })
   });
   if (!res.ok) throw new Error('Failed to add pantry item');
+  return res.json();
+};
+
+// Can I Eat This?
+export const checkFoodPermission = async (foodData) => {
+  const res = await fetch(`${API_BASE}/can-i-eat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader(),
+    },
+    body: JSON.stringify(foodData),
+  });
+  if (!res.ok) throw new Error('Advice check failed');
   return res.json();
 };
 

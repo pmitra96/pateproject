@@ -3,6 +3,7 @@ package controllers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/pmitra96/pateproject/database"
 	"github.com/pmitra96/pateproject/llm"
@@ -35,34 +36,6 @@ type PersonalizedMealRequest struct {
 	Inventory []llm.InventoryItem `json:"inventory"`
 	Goals     []llm.GoalInfo      `json:"goals"`
 	TimeOfDay string              `json:"time_of_day"`
-}
-
-func GenerateStory(w http.ResponseWriter, r *http.Request) {
-	logger.Info("Received story generation request")
-
-	var req StoryRequest
-	if r.Body != nil {
-		json.NewDecoder(r.Body).Decode(&req)
-	}
-
-	client := llm.NewClient()
-	story, err := client.GenerateStory(req.Topic)
-
-	if err != nil {
-		logger.Error("Failed to generate story", "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: err.Error()})
-		return
-	}
-
-	logger.Info("Story generated successfully", "topic", req.Topic)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(StoryResponse{
-		Story: story,
-		Topic: req.Topic,
-	})
 }
 
 func SuggestMeal(w http.ResponseWriter, r *http.Request) {
@@ -128,6 +101,29 @@ func SuggestMealPersonalized(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fetch authoritative pantry data (with nutrition) from DB
+	var dbPantryItems []models.PantryItem
+	if err := database.DB.Preload("Item").Preload("Ingredient").Where("user_id = ?", userID).Find(&dbPantryItems).Error; err != nil {
+		logger.Error("Failed to fetch pantry for suggestions", "error", err)
+	}
+
+	// Create a map for quick lookup
+	// Keying by Ingredient Name as that's what likely matches req.Inventory names
+	pantryMap := make(map[string]models.Item)
+	for _, p := range dbPantryItems {
+		pantryMap[strings.ToLower(p.Ingredient.Name)] = p.Item
+	}
+
+	// Enrich request inventory with nutrition data
+	for i := range req.Inventory {
+		if item, ok := pantryMap[strings.ToLower(req.Inventory[i].Name)]; ok {
+			req.Inventory[i].Calories = item.Calories
+			req.Inventory[i].Protein = item.Protein
+			req.Inventory[i].Fat = item.Fat
+			req.Inventory[i].Carbs = item.Carbs
+		}
+	}
+
 	// Fetch user preferences
 	var userPrefs models.UserPreferences
 	var preferencesInfo *llm.UserPreferencesInfo
@@ -189,8 +185,8 @@ func SuggestMealPersonalized(w http.ResponseWriter, r *http.Request) {
 }
 
 type ChatRequest struct {
-	Message   string            `json:"message"`
-	History   []llm.ChatMessage `json:"history"`
+	Message   string              `json:"message"`
+	History   []llm.ChatMessage   `json:"history"`
 	Inventory []llm.InventoryItem `json:"inventory"`
 	Goals     []llm.GoalInfo      `json:"goals"`
 }
