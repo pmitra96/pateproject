@@ -10,6 +10,7 @@ import (
 	"github.com/pmitra96/pateproject/database"
 	"github.com/pmitra96/pateproject/logger"
 	"github.com/pmitra96/pateproject/models"
+	"github.com/pmitra96/pateproject/services"
 	"gorm.io/gorm"
 )
 
@@ -113,6 +114,10 @@ func ComputeRemainingDayState(userID uint, date time.Time) (*models.RemainingDay
 		RemainingProtein:  remainingProtein,
 		RemainingFat:      remainingFat,
 		RemainingCarbs:    remainingCarbs,
+		TargetCalories:    float64(profile.DailyCalorieTarget),
+		TargetProtein:     profile.DailyProteinTarget,
+		TargetFat:         profile.DailyFatTarget,
+		TargetCarbs:       profile.DailyCarbsTarget,
 		MealsRemaining:    mealsRemaining,
 		ControlMode:       controlMode,
 		LastComputedAt:    time.Now(),
@@ -261,5 +266,104 @@ func ValidateMeal(w http.ResponseWriter, r *http.Request) {
 		"allowed":       allowed,
 		"reason":        reason,
 		"current_state": state,
+	})
+}
+
+// PermissionCheckResponse includes the decision and the estimated food data
+type PermissionCheckResponse struct {
+	services.PermissionResult
+	Food services.FoodEstimate `json:"food"`
+}
+
+// CheckFoodPermissionHandler handles the API request to check food permission
+func CheckFoodPermissionHandler(w http.ResponseWriter, r *http.Request) {
+	userID, err := getUserID(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		Query    string  `json:"query"` // User text input
+		Calories float64 `json:"calories"`
+		Protein  float64 `json:"protein"`
+		Fat      float64 `json:"fat"`
+		Carbs    float64 `json:"carbs"`
+		Name     string  `json:"name"` // Fallback name
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// 1. Get current state
+	state, err := ComputeRemainingDayState(userID, time.Now())
+	if err != nil {
+		logger.Error("Failed to compute state for permission check", "error", err)
+		http.Error(w, "Failed to compute state", http.StatusInternalServerError)
+		return
+	}
+
+	// 2. Determine FoodEstimate
+	var food services.FoodEstimate
+
+	if req.Query != "" {
+		// Use automatic estimation
+		ns := services.NewNutritionService()
+		estimated, err := ns.EstimateNutritionFromQuery(req.Query)
+		if err != nil {
+			logger.Error("Failed to estimate nutrition", "query", req.Query, "error", err)
+			http.Error(w, "Failed to estimate nutrition for: "+req.Query, http.StatusInternalServerError)
+			return
+		}
+		food = *estimated
+	} else {
+		// Manual input fallback to support old/direct usage
+		food = services.FoodEstimate{
+			Name:     req.Name,
+			Calories: req.Calories,
+			Protein:  req.Protein,
+			Fat:      req.Fat,
+			Carbs:    req.Carbs,
+		}
+	}
+
+	// 3. Check permission
+	result := services.CheckFoodPermission(state, food)
+
+	// 4. Compute Simulated State
+	// Clone current state to simulate impact
+	simulatedState := *state
+	simulatedState.RemainingCalories -= food.Calories
+	simulatedState.RemainingProtein -= food.Protein
+	simulatedState.RemainingFat -= food.Fat
+	simulatedState.RemainingCarbs -= food.Carbs
+
+	// Create a new struct for response to include SimulatedState
+	type PermissionCheckResponseWithSimulation struct {
+		PermissionResult services.PermissionResult `json:"permission_result"`
+		Food             services.FoodEstimate     `json:"food"`
+		CurrentState     models.RemainingDayState  `json:"current_state"`
+		SimulatedState   models.RemainingDayState  `json:"simulated_state"`
+	}
+
+	// 5. Log the check
+	logger.Info("Food permission check",
+		"user_id", userID,
+		"food", food.Name,
+		"calories", food.Calories,
+		"decision", result.Status,
+		"reason", result.Reason,
+		"control_mode", state.ControlMode,
+	)
+
+	// 6. Return full response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(PermissionCheckResponseWithSimulation{
+		PermissionResult: result,
+		Food:             food,
+		CurrentState:     *state,
+		SimulatedState:   simulatedState,
 	})
 }

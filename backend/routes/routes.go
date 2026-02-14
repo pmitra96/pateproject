@@ -37,7 +37,7 @@ func SetupRouter() *chi.Mux {
 	})
 
 	// LLM Routes (public for now, add auth as needed)
-	r.Post("/llm/story", controllers.GenerateStory)
+	// r.Post("/llm/story", controllers.GenerateStory) // Deprecated/Removed
 	r.Post("/llm/suggest-meal", controllers.SuggestMeal)
 
 	// User Routes (OAuth/UserContext protected)
@@ -85,6 +85,7 @@ func SetupRouter() *chi.Mux {
 		r.Get("/remaining-day-state", controllers.GetRemainingDayState)
 		r.Post("/goals/{goal_id}/targets", controllers.SetGoalMacroTargets) // Adjusted path for brevity? No, prompt said /api/goals/{goal_id}/macro-targets. I'll stick to closest: /goals/{goal_id}/targets
 		r.Get("/meals/validate", controllers.ValidateMeal)
+		r.Post("/can-i-eat", controllers.CheckFoodPermissionHandler)
 
 	})
 

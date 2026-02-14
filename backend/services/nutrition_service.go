@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pmitra96/pateproject/database"
 	"github.com/pmitra96/pateproject/llm"
 	"github.com/pmitra96/pateproject/logger"
 	"github.com/pmitra96/pateproject/models"
@@ -243,4 +244,92 @@ Return ONLY a JSON object:
 	}
 	logger.Info(msg, "item", item.Name, "kcal", item.Calories)
 	return nil
+}
+
+// EstimateNutritionFromQuery estimates nutrition from a text query
+// It first checks the database for a matching item, then falls back to LLM
+func (s *NutritionService) EstimateNutritionFromQuery(query string) (*FoodEstimate, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("empty query")
+	}
+
+	// 1. Search DB for exact or close match
+	// We'll search Items table.
+	var item models.Item
+	// Try simplified search: Name ILIKE query
+	err := database.DB.Where("name ILIKE ?", query).Or("product_name ILIKE ?", query).Order("nutrition_verified DESC").First(&item).Error
+	if err == nil {
+		// Found it! use its macros
+		// Check if it has non-zero macros
+		if item.Calories > 0 {
+			logger.Info("Found item in DB for query", "query", query, "item", item.Name)
+			return &FoodEstimate{
+				Calories: item.Calories,
+				Protein:  item.Protein,
+				Fat:      item.Fat,
+				Carbs:    item.Carbs,
+				Name:     item.Name,
+			}, nil
+		}
+	}
+
+	// 2. Fallback to LLM
+	logger.Info("No DB match found, estimating with LLM", "query", query)
+
+	// We need to be careful with unit inference.
+	// If query is "2 eggs", we should parse it?
+	// For "Can I Eat This", the user usually asks "Can I eat a pizza?" (1 unit implied)
+	// or "Can I eat 2 slices of pizza?".
+	//
+	// Let's refine the LLM prompt in a new private method or reuse.
+	// estimateWithLLM builds a prompt based on Item fields.
+	// Let's just create a new simple method for query-based estimation to avoid hacky Item struct usage.
+
+	prompt := fmt.Sprintf(`Estimate nutritional information for: "%s".
+Assume a standard serving size if quantity is not specified.
+
+Return ONLY a JSON object:
+{
+  "calories": float,
+  "protein": float,
+  "carbs": float,
+  "fat": float,
+  "serving_size": string
+}`, query)
+
+	// Using the same client
+	resp, err := s.llmClient.Chat([]llm.Message{
+		{Role: "system", Content: "You are a nutrition expert. Provide estimated nutritional data. Be conservative but realistic."},
+		{Role: "user", Content: prompt},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	cleanResp := strings.TrimSpace(resp)
+	if strings.HasPrefix(cleanResp, "```json") {
+		cleanResp = strings.TrimPrefix(cleanResp, "```json")
+		cleanResp = strings.TrimSuffix(cleanResp, "```")
+	}
+
+	var data struct {
+		Calories    float64 `json:"calories"`
+		Protein     float64 `json:"protein"`
+		Carbs       float64 `json:"carbs"`
+		Fat         float64 `json:"fat"`
+		ServingSize string  `json:"serving_size"`
+	}
+
+	if err := json.Unmarshal([]byte(cleanResp), &data); err != nil {
+		return nil, err
+	}
+
+	return &FoodEstimate{
+		Calories: data.Calories,
+		Protein:  data.Protein,
+		Fat:      data.Fat,
+		Carbs:    data.Carbs,
+		Name:     query, // or data.ServingSize + " " + query
+	}, nil
 }

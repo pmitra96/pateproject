@@ -23,6 +23,7 @@ import {
   addPantryItem,
   fetchRemainingDayState,
   setGoalMacroTargets,
+  checkFoodPermission,
   // validateMeal,
 
 } from './api';
@@ -31,6 +32,7 @@ import RemainingDayPanel from './components/RemainingDayPanel';
 
 import MealBlockedBanner from './components/MealBlockedBanner';
 import MacroTargetModal from './components/MacroTargetModal';
+import CanIEatModal from './components/CanIEatModal';
 
 const getDefaultMealType = () => {
   const hour = new Date().getHours();
@@ -83,6 +85,13 @@ function App() {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [pastConversations, setPastConversations] = useState([]);
   const [showConversationHistory, setShowConversationHistory] = useState(false);
+
+  // Can I Eat State
+  const [showCanIEatModal, setShowCanIEatModal] = useState(false);
+  const [canIEatResult, setCanIEatResult] = useState(null);
+  const [pendingMealLog, setPendingMealLog] = useState(null); // To store meal data while modal is open
+
+
 
   // User preferences state
   const [showPreferencesModal, setShowPreferencesModal] = useState(false);
@@ -577,7 +586,72 @@ function App() {
       return;
     }
 
-
+    // Prepare meal data for permission check
+    // We need to estimate nutrition. The backend does this during log, but for "Can I Eat",
+    // we need to send nutrition data.
+    // The current frontend doesn't calculate nutrition sum before logging.
+    // However, the backend 'checkFoodPermission' requires calories/macros.
+    //
+    // OPTION 1: We blindly send the ingredients to a new endpoint that calculates AND checks?
+    // The spec says "Entry Points: Pantry item, Recent meal...".
+    //
+    // Let's implement a slight deviation: The "Log Meal" button will first try to VALIDATE.
+    // But since we don't have macros on frontend easily (mixed units),
+    // we might need to rely on the backend logging response which might return a BLOCK?
+    //
+    // NO, the spec says "Can I Eat This?" is a separate feature/gate.
+    // But the user workflow here is "Log Meal".
+    //
+    // Let's stick to the Spec: "Pre-check".
+    // Implementation:
+    // 1. We should probably ask the backend to "Preview" the meal to get macros, OR
+    // 2. We just log it and if it's blocked, the backend throws an error with the reason (as per existing logic in `handleLogMealSubmit` catch block).
+    //
+    // The existing catch block handles 403.
+    // Let's see if we can use the `checkFoodPermission` explicitly.
+    //
+    // For this MVP execution:
+    // I will call `checkFoodPermission` if we have nutrition info.
+    // But we don't have nutrition info here easily without calculating it.
+    //
+    // Alternative: The spec implies a specific "Can I Eat This" button/modal.
+    // Let's add that separately as requested in the plan: "Add a 'Can I Eat This?' floating action button or menu item".
+    //
+    // NOTE: The `handleLogMealSubmit` is for the "Log Meal" tab.
+    // The spec "Can I Eat This?" is a "Gate".
+    //
+    // Let's just implement the normal log for now.
+    //
+    // WAIT, I need to implement the interaction.
+    // I added `checkFoodPermission` which takes {calories, protein...}.
+    //
+    // Let's add a "Check Permission" button in the Log Meal form OR
+    // just let the user log and if it fails (because I should enforce it in backend `LogMeal` too?),
+    // show the modal.
+    //
+    // Spec: "It is a gate."
+    //
+    // Refactoring `handleLogMealSubmit` to use the permission check is complex because we need to resolve ingredients to macros first.
+    // The backend `LogMeal` does this.
+    //
+    // Let's modify `LogMeal` in backend to ALSO return the permission result if it blocks?
+    // Current `LogMeal` doesn't seem to block based on `remaining_day_controller.go`?
+    // The spec says "Block".
+    //
+    // I haven't modified `LogMeal` to enforce the block yet.
+    // The plan said: "Implement 'Can I eat this?' logic in controller/service".
+    // It didn't explicitly say "Modify LogMeal to enforce".
+    // It said "Provide users with a **fast, authoritative answer**... It is a **gate**."
+    //
+    // The "Can I Eat This?" feature is likely a pre-check tool.
+    //
+    // Let's add a button in the UI "Can I Eat This?" that opens a specific modal to check a food.
+    //
+    // But for `handleLogMealSubmit` (the main logging),
+    // I will leave it as is for now, maybe just calling log.
+    //
+    // Let's implement the specific "Can I Eat This?" UI check.
+    //
     try {
       const response = await logMeal({
         name: mealName,
@@ -596,12 +670,12 @@ function App() {
         loadState(); // Fallback
       }
 
-      // Refresh history if needed
       if (activeTab === 'nutrition') {
-        const history = await fetchMealHistory();
-        setMealHistory(history);
+        fetchMealHistory().then(setMealHistory);
       }
     } catch (err) {
+      // If the backend `LogMeal` were to return 403 with permission data, we could show the modal here.
+      // For now, standard alert/error handling.
       if (err.status === 403) {
         setCurrentBlockedReason(err.reason);
       } else {
@@ -610,6 +684,31 @@ function App() {
       }
     }
   };
+
+  // Handler for the separate "Can I Eat This?" feature
+  const handleCheckFood = async (food) => {
+    // food needs to have {name, calories, protein, fat, carbs}
+    try {
+      const result = await checkFoodPermission(food);
+      setCanIEatResult(result);
+
+      // If the result contains food data (from estimation), use it
+      const foodName = result.food ? result.food.name : (food.query || food.name);
+
+      // Store pending meal to allow "Log This" from the modal
+      setPendingMealLog({
+        name: foodName,
+        query: food.query,
+        ingredients: [`1 serving ${foodName}`],
+      });
+      setShowCanIEatModal(true);
+    } catch (err) {
+      console.error("Advice check failed", err);
+      alert("Failed to get advice: " + err.message);
+      throw err; // Re-throw so the modal knows it failed
+    }
+  };
+
 
 
   return (
@@ -691,6 +790,17 @@ function App() {
               >
                 {isLoadingSuggestions ? '✨ Thinking...' : '✨ Suggest a Meal'}
               </button>
+              {/* Quick Check Button - Temporary for MVP testing */}
+              <button
+                className="btn"
+                onClick={() => {
+                  setCanIEatResult(null); // Reset result to show input form
+                  setShowCanIEatModal(true);
+                }}
+                style={{ whiteSpace: 'nowrap', background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', marginLeft: '0.5rem' }}
+              >
+                ❓ Can I Eat This?
+              </button>
             </div>
           )}
 
@@ -717,7 +827,9 @@ function App() {
                             <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem' }}>{meal.name}</h3>
                             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
                               <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9' }}>🔥 {meal.calories} kcal</span>
-                              <span className="badge" style={{ background: '#dcfce7', color: '#15803d' }}>💪 {meal.protein} protein</span>
+                              <span className="badge" style={{ background: '#dcfce7', color: '#15803d' }}>💪 {meal.protein}g protein</span>
+                              {meal.fat && <span className="badge" style={{ background: '#fef3c7', color: '#d97706' }}>🥓 {meal.fat}g fat</span>}
+                              {meal.carbs && <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1' }}>🍞 {meal.carbs}g carbs</span>}
                               <span className="badge">⏱️ {meal.prep_time}</span>
                             </div>
                             <div className="text-secondary mb-3" style={{ fontSize: '0.8rem', flex: 1 }}>
@@ -1491,6 +1603,8 @@ function App() {
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
                 <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9' }}>🔥 {typeof selectedMeal.calories === 'number' ? selectedMeal.calories.toFixed(0) : selectedMeal.calories} kcal</span>
                 <span className="badge" style={{ background: '#dcfce7', color: '#15803d' }}>💪 {typeof selectedMeal.protein === 'number' ? selectedMeal.protein.toFixed(1) : selectedMeal.protein}g protein</span>
+                {selectedMeal.fat && <span className="badge" style={{ background: '#fef3c7', color: '#d97706' }}>🥓 {typeof selectedMeal.fat === 'number' ? selectedMeal.fat.toFixed(1) : selectedMeal.fat}g fat</span>}
+                {selectedMeal.carbs && <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1' }}>🍞 {typeof selectedMeal.carbs === 'number' ? selectedMeal.carbs.toFixed(1) : selectedMeal.carbs}g carbs</span>}
                 {selectedMeal.prep_time && <span className="badge">⏱️ {selectedMeal.prep_time}</span>}
               </div>
 
@@ -1901,6 +2015,42 @@ function App() {
           </div>
         </div>
       )}
+      <CanIEatModal
+        isOpen={showCanIEatModal}
+        onClose={() => setShowCanIEatModal(false)}
+        checkResult={canIEatResult}
+        foodName={pendingMealLog?.name}
+        onCheck={(query) => handleCheckFood({ query })}
+        onReset={() => setCanIEatResult(null)}
+        onLog={async () => {
+          try {
+            const food = canIEatResult.food;
+            await logMeal({
+              name: food.name,
+              ingredients: pendingMealLog.ingredients || [`1 serving ${food.name}`],
+              calories: food.calories,
+              protein: food.protein,
+              fat: food.fat,
+              carbs: food.carbs,
+              was_override: false
+            });
+            alert("Meal logged successfully!");
+            setShowCanIEatModal(false);
+            setCanIEatResult(null);
+            loadData(); // Refresh remaining stats
+          } catch (err) {
+            console.error("Failed to log meal from modal", err);
+            alert("Failed to log meal: " + err.message);
+          }
+        }}
+        onLogSmall={() => {
+          setShowCanIEatModal(false);
+          setActiveTab('log-meal');
+          setMealName(pendingMealLog.name + " (Small)");
+          setMealIngredients(pendingMealLog.ingredients);
+          alert("Please adjust quantity to be smaller.");
+        }}
+      />
     </div >
   );
 }
