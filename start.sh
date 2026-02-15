@@ -2,6 +2,9 @@
 # Quick start script for PateProject
 # Usage: ./start.sh
 
+# Ensure Homebrew is in PATH
+export PATH="/opt/homebrew/bin:$PATH"
+
 # Load nvm
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"

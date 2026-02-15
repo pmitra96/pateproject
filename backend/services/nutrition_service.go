@@ -248,7 +248,7 @@ Return ONLY a JSON object:
 
 // EstimateNutritionFromQuery estimates nutrition from a text query
 // It first checks the database for a matching item, then falls back to LLM
-func (s *NutritionService) EstimateNutritionFromQuery(query string) (*FoodEstimate, error) {
+func (s *NutritionService) EstimateNutritionFromQuery(query string) (*models.FoodEstimate, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("empty query")
@@ -264,7 +264,7 @@ func (s *NutritionService) EstimateNutritionFromQuery(query string) (*FoodEstima
 		// Check if it has non-zero macros
 		if item.Calories > 0 {
 			logger.Info("Found item in DB for query", "query", query, "item", item.Name)
-			return &FoodEstimate{
+			return &models.FoodEstimate{
 				Calories: item.Calories,
 				Protein:  item.Protein,
 				Fat:      item.Fat,
@@ -325,11 +325,46 @@ Return ONLY a JSON object:
 		return nil, err
 	}
 
-	return &FoodEstimate{
+	return &models.FoodEstimate{
 		Calories: data.Calories,
 		Protein:  data.Protein,
 		Fat:      data.Fat,
 		Carbs:    data.Carbs,
 		Name:     query, // or data.ServingSize + " " + query
 	}, nil
+}
+
+// PermissionResult represents the decision on whether a food item is allowed
+type PermissionResult struct {
+	Status  string `json:"status"` // "allowed" or "denied"
+	Allowed bool   `json:"allowed"`
+	Reason  string `json:"reason"`
+}
+
+// CheckFoodPermission checks if a food item is allowed based on remaining day state
+func CheckFoodPermission(state *models.RemainingDayState, food models.FoodEstimate) PermissionResult {
+	// Simple logic: check if eating this food would exceed remaining calories
+	if state.RemainingCalories-food.Calories < 0 {
+		return PermissionResult{
+			Status:  "denied",
+			Allowed: false,
+			Reason:  fmt.Sprintf("Would exceed daily calorie limit. Remaining: %.0f kcal, Food: %.0f kcal", state.RemainingCalories, food.Calories),
+		}
+	}
+
+	// Check if it would put protein significantly below target (if in control mode)
+	if state.ControlMode != "free" && state.RemainingProtein-food.Protein < -10 {
+		return PermissionResult{
+			Status:  "denied",
+			Allowed: false,
+			Reason:  fmt.Sprintf("Would significantly exceed protein target. Remaining: %.1fg, Food: %.1fg", state.RemainingProtein, food.Protein),
+		}
+	}
+
+	// Otherwise, allow
+	return PermissionResult{
+		Status:  "allowed",
+		Allowed: true,
+		Reason:  "Within limits",
+	}
 }

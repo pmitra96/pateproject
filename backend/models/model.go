@@ -250,3 +250,12 @@ type ControlModeTransition struct {
 	RemainingCaloriesAtTransition float64   `json:"remaining_calories_at_transition"`
 	CreatedAt                     time.Time `json:"created_at"`
 }
+
+// FoodEstimate represents nutrition information estimated from a query or food item.
+type FoodEstimate struct {
+	Name     string  `json:"name"`
+	Calories float64 `json:"calories"`
+	Protein  float64 `json:"protein"`
+	Fat      float64 `json:"fat"`
+	Carbs    float64 `json:"carbs"`
+}

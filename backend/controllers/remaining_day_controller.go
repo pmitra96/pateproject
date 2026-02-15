@@ -272,7 +272,7 @@ func ValidateMeal(w http.ResponseWriter, r *http.Request) {
 // PermissionCheckResponse includes the decision and the estimated food data
 type PermissionCheckResponse struct {
 	services.PermissionResult
-	Food services.FoodEstimate `json:"food"`
+	Food models.FoodEstimate `json:"food"`
 }
 
 // CheckFoodPermissionHandler handles the API request to check food permission
@@ -306,7 +306,7 @@ func CheckFoodPermissionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Determine FoodEstimate
-	var food services.FoodEstimate
+	var food models.FoodEstimate
 
 	if req.Query != "" {
 		// Use automatic estimation
@@ -320,7 +320,7 @@ func CheckFoodPermissionHandler(w http.ResponseWriter, r *http.Request) {
 		food = *estimated
 	} else {
 		// Manual input fallback to support old/direct usage
-		food = services.FoodEstimate{
+		food = models.FoodEstimate{
 			Name:     req.Name,
 			Calories: req.Calories,
 			Protein:  req.Protein,
@@ -343,7 +343,7 @@ func CheckFoodPermissionHandler(w http.ResponseWriter, r *http.Request) {
 	// Create a new struct for response to include SimulatedState
 	type PermissionCheckResponseWithSimulation struct {
 		PermissionResult services.PermissionResult `json:"permission_result"`
-		Food             services.FoodEstimate     `json:"food"`
+		Food             models.FoodEstimate     `json:"food"`
 		CurrentState     models.RemainingDayState  `json:"current_state"`
 		SimulatedState   models.RemainingDayState  `json:"simulated_state"`
 	}

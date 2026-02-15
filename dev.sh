@@ -26,8 +26,8 @@ if [ -f .env ]; then
   set +a
 fi
 
-# Ensure PostgreSQL binaries are in PATH
-export PATH="/opt/homebrew/opt/postgresql@15/bin:$PATH"
+# Ensure Homebrew binaries are in PATH (npm, node, go, etc.)
+export PATH="/opt/homebrew/bin:/opt/homebrew/opt/postgresql@14/bin:$PATH"
 
 echo "🚀 Starting PateProject Development Environment (Local Only)..."
 
