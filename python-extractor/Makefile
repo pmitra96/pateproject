@@ -59,5 +59,8 @@ seed-categories:
 scrape-all:
 	$(PYTHON) scripts/scrape_all.py
 
+export-data:
+	$(PYTHON) scripts/export_scraped_data.py
+
 monitor:
 	$(CELERY) -A app.worker.celery_app flower --port=5555
