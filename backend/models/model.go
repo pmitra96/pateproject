@@ -71,6 +71,8 @@ type Item struct {
 	Carbs             float64 `gorm:"default:0" json:"carbs"`
 	Fat               float64 `gorm:"default:0" json:"fat"`
 	Fiber             float64 `gorm:"default:0" json:"fiber"`
+	ServingWeight     float64 `gorm:"default:0" json:"serving_weight"` // Weight for which macros are defined (e.g. 100, or 5 for sachet)
+	ServingUnit       string  `gorm:"size:50" json:"serving_unit"`     // Unit of serving weight (g, ml, pcs, sachet)
 	NutritionVerified bool    `gorm:"default:false" json:"nutrition_verified"`
 }
 

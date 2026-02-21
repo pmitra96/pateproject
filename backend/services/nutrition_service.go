@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pmitra96/pateproject/config"
 	"github.com/pmitra96/pateproject/database"
 	"github.com/pmitra96/pateproject/llm"
 	"github.com/pmitra96/pateproject/logger"
@@ -25,8 +26,15 @@ func NewNutritionService() *NutritionService {
 
 // FetchItemNutrition attempts to fetch nutrition data for an item.
 func (s *NutritionService) FetchItemNutrition(item *models.Item) error {
-	// Step 1: Check Open Food Facts (Free, no key required for basic search)
-	err := s.fetchFromOpenFoodFacts(item)
+	// Step 0: Check our own Scraper (Zepto)
+	err := s.fetchFromPythonScraper(item)
+	if err == nil && item.NutritionVerified {
+		logger.Info("Nutrition fetched from Zepto Scraper", "item", item.Name)
+		return nil
+	}
+
+	// Step 1: Check Open Food Facts
+	err = s.fetchFromOpenFoodFacts(item)
 	if err == nil && item.NutritionVerified {
 		logger.Info("Nutrition fetched from Open Food Facts", "item", item.Name)
 		return nil
@@ -34,6 +42,77 @@ func (s *NutritionService) FetchItemNutrition(item *models.Item) error {
 
 	// Step 2: Fallback to LLM Estimation
 	return s.estimateWithLLM(item)
+}
+
+func (s *NutritionService) fetchFromPythonScraper(item *models.Item) error {
+	baseURL := config.GetEnv("SCRAPER_API_URL", "http://localhost:8000")
+
+	cleanProductName := strings.TrimSpace(item.ProductName)
+	brandName := ""
+	if item.Brand != nil {
+		brandName = strings.TrimSpace(item.Brand.Name)
+	}
+
+	query := cleanProductName
+	if brandName != "" && !strings.Contains(strings.ToLower(cleanProductName), strings.ToLower(brandName)) {
+		query = brandName + " " + cleanProductName
+	}
+
+	url := fmt.Sprintf("%s/api/v1/products/search?query=%s", baseURL, strings.ReplaceAll(query, " ", "+"))
+	logger.Info("Searching Python Scraper", "query", query, "url", url)
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("scraper request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("scraper returned status: %d", resp.StatusCode)
+	}
+
+	var results []struct {
+		Name          string `json:"name"`
+		NutritionInfo struct {
+			Energy        float64 `json:"energy"`
+			Protein       float64 `json:"protein"`
+			Fat           float64 `json:"fat"`
+			Carbohydrates float64 `json:"carbohydrates"`
+		} `json:"nutrition_info"`
+		ServingSizeValue float64 `json:"serving_size_value"`
+		ServingSizeUnit  string  `json:"serving_size_unit"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return fmt.Errorf("failed to decode scraper response: %v", err)
+	}
+
+	if len(results) > 0 {
+		// Take the first result
+		p := results[0]
+		if p.NutritionInfo.Energy > 0 || p.NutritionInfo.Protein > 0 {
+			item.Calories = p.NutritionInfo.Energy
+			item.Protein = p.NutritionInfo.Protein
+			item.Carbs = p.NutritionInfo.Carbohydrates
+			item.Fat = p.NutritionInfo.Fat
+
+			// Track portion context
+			if p.ServingSizeValue > 0 {
+				item.ServingWeight = p.ServingSizeValue
+				item.ServingUnit = p.ServingSizeUnit
+			} else {
+				// Default to 100g standard if not specified
+				item.ServingWeight = 100
+				item.ServingUnit = "g"
+			}
+
+			item.NutritionVerified = true
+			return nil
+		}
+	}
+
+	return fmt.Errorf("no products found in scraper")
 }
 
 func (s *NutritionService) fetchFromOpenFoodFacts(item *models.Item) error {
