@@ -3,10 +3,12 @@ package routes
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/pmitra96/pateproject/config"
 	"github.com/pmitra96/pateproject/controllers"
 	"github.com/pmitra96/pateproject/jobs"
 	auth "github.com/pmitra96/pateproject/middleware"
@@ -18,8 +20,13 @@ func SetupRouter() *chi.Mux {
 	r.Use(middleware.Recoverer)
 
 	// CORS Configuration
+	allowedOrigins := []string{"http://localhost:5173", "http://127.0.0.1:5173"}
+	if origins := config.GetEnv("ALLOWED_ORIGINS", ""); origins != "" {
+		allowedOrigins = append(allowedOrigins, strings.Split(origins, ",")...)
+	}
+
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:5173", "http://127.0.0.1:5173"},
+		AllowedOrigins:   allowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-API-Key"},
 		ExposedHeaders:   []string{"Link"},
