@@ -30,7 +30,8 @@ func main() {
 	r := routes.SetupRouter()
 
 	port := config.GetEnv("PORT", "8080")
-	logger.Info("Server starting", "port", port)
+	logger.Info("PateProject Backend v1.1 Starting", "port", port, "revision", "67ff30a+")
+	logger.Info("Listening on", "addr", ":"+port)
 	if err := http.ListenAndServe(":"+port, r); err != nil {
 		logger.Error("Server failed to start", "error", err)
 	}

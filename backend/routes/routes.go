@@ -15,21 +15,24 @@ import (
 )
 
 func SetupRouter() *chi.Mux {
+	fmt.Println("Setting up router v1.1...")
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
 	// Health Check
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("Health check hit")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"up"}`))
+		w.Write([]byte(`{"status":"up","version":"1.1"}`))
 	})
 
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("Root hit")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message":"PateProject Backend API up"}`))
+		w.Write([]byte(`{"message":"PateProject Backend API up v1.1"}`))
 	})
 
 	// CORS Configuration
