@@ -25,6 +25,7 @@ func getUserID(r *http.Request) (uint, error) {
 		return 0, http.ErrNoCookie
 	}
 
+	var claims map[string]interface{}
 	searchIDs := []string{idStr}
 
 	// If it looks like a JWT, we need the "sub" claim
@@ -33,7 +34,6 @@ func getUserID(r *http.Request) (uint, error) {
 		if len(parts) >= 2 {
 			payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 			if err == nil {
-				var claims map[string]interface{}
 				if err := json.Unmarshal(payload, &claims); err == nil {
 					if sub, ok := claims["sub"].(string); ok {
 						searchIDs = append(searchIDs, sub)
@@ -51,7 +51,49 @@ func getUserID(r *http.Request) (uint, error) {
 		}
 	}
 
-	// 2. Try numeric ID (legacy/internal)
+	// 2. Auto-Provision: If we have valid claims from a JWT but no identity, create a user
+	if sub, ok := claims["sub"].(string); ok {
+		email, _ := claims["email"].(string)
+		name, _ := claims["name"].(string)
+		if name == "" {
+			name = "New User"
+		}
+
+		// Check if user already exists by email (to avoid duplicates if they link multiple providers later)
+		var user models.User
+		if email != "" {
+			if err := database.DB.Where("email = ?", email).First(&user).Error; err != nil {
+				// Create new user
+				user = models.User{
+					Email: email,
+					Name:  name,
+				}
+				if err := database.DB.Create(&user).Error; err != nil {
+					logger.Error("Failed to auto-provision user", "error", err)
+					return 0, err
+				}
+			}
+		} else {
+			// No email? Create a guest-like user
+			user = models.User{Name: name}
+			database.DB.Create(&user)
+		}
+
+		// Create identity
+		identity = models.UserIdentity{
+			UserID:     user.ID,
+			Provider:   "google", // Assuming google for now as per frontend
+			ExternalID: sub,
+		}
+		if err := database.DB.Create(&identity).Error; err != nil {
+			logger.Error("Failed to create user identity", "error", err)
+			return 0, err
+		}
+		logger.Info("Auto-provisioned new user", "user_id", user.ID, "external_id", sub)
+		return user.ID, nil
+	}
+
+	// 3. Try numeric ID (legacy/internal)
 	if id, err := strconv.Atoi(idStr); err == nil && len(idStr) < 10 {
 		return uint(id), nil
 	}
