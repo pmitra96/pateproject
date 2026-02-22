@@ -23,8 +23,11 @@ func SetupRouter() *chi.Mux {
 	// CORS Configuration
 	allowedOrigins := []string{"http://localhost:5173", "http://127.0.0.1:5173"}
 	if origins := config.GetEnv("ALLOWED_ORIGINS", ""); origins != "" {
-		allowedOrigins = append(allowedOrigins, strings.Split(origins, ",")...)
+		for _, origin := range strings.Split(origins, ",") {
+			allowedOrigins = append(allowedOrigins, strings.TrimSpace(origin))
+		}
 	}
+	fmt.Printf("CORS: Allowed Origins: %v\n", allowedOrigins)
 
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins,
