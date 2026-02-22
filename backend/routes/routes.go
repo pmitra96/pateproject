@@ -20,21 +20,6 @@ func SetupRouter() *chi.Mux {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
-	// Health Check
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("Health check hit")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"up","version":"1.1"}`))
-	})
-
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("Root hit")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"message":"PateProject Backend API up v1.1"}`))
-	})
-
 	// CORS Configuration
 	allowedOrigins := []string{"http://localhost:5173", "http://127.0.0.1:5173"}
 	if origins := config.GetEnv("ALLOWED_ORIGINS", ""); origins != "" {
@@ -49,6 +34,21 @@ func SetupRouter() *chi.Mux {
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
+
+	// Health Check
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("Health check hit")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"up","version":"1.1"}`))
+	})
+
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("Root hit")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message":"PateProject Backend API up v1.1"}`))
+	})
 
 	// Public / Auth
 	// r.Post("/auth/login", ...) // If we had real auth
