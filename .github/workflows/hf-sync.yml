@@ -21,7 +21,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           # Update these to match your Space
           HF_USERNAME: pmitra96
-          HF_SPACE_NAME: pateproject-extractor
+          HF_SPACE_NAME: pateproject
         run: |
           git config --global user.email "git-action@example.com"
           git config --global user.name "GitHub Action"
