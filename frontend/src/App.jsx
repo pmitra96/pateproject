@@ -25,7 +25,8 @@ import {
   setGoalMacroTargets,
   checkFoodPermission,
   // validateMeal,
-
+  API_BASE,
+  fetchOrders,
 } from './api';
 
 import RemainingDayPanel from './components/RemainingDayPanel';
@@ -202,7 +203,7 @@ function App() {
   useEffect(() => {
     if (!user) return;
 
-    const eventSource = new EventSource('http://localhost:8080/sse/nutrition');
+    const eventSource = new EventSource(`${API_BASE}/sse/nutrition`);
 
     eventSource.addEventListener('nutrition_update', (event) => {
       try {
@@ -278,10 +279,7 @@ function App() {
         const goalsData = await fetchGoals();
         setGoals(goalsData || []);
       } else if (activeTab === 'history') {
-        const res = await fetch('http://localhost:8080/orders', {
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-        });
-        const data = await res.json();
+        const data = await fetchOrders();
         setOrders(data);
       }
     } catch (err) {

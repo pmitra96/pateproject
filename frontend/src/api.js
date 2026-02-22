@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 
 const getAuthHeader = () => {
   const token = localStorage.getItem('token');
@@ -52,6 +52,14 @@ export const fetchLowStock = async () => {
     headers: getAuthHeader()
   });
   if (!res.ok) throw new Error('Failed to fetch low stock');
+  return res.json();
+};
+
+export const fetchOrders = async () => {
+  const res = await fetch(`${API_BASE}/orders`, {
+    headers: getAuthHeader()
+  });
+  if (!res.ok) throw new Error('Failed to fetch orders');
   return res.json();
 };
 
