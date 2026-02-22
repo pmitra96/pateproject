@@ -2,8 +2,11 @@ from fastapi import FastAPI
 from app.api.endpoints import router as api_router
 from app.api.extraction import router as extraction_router
 from sqladmin import Admin, ModelView
-from app.database import engine
+from app.database import engine, Base
 from app.models import Product, Brand, Category
+
+# Initialize database tables
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Zepto Scraper API")
 
