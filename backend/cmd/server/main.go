@@ -21,6 +21,11 @@ func main() {
 	}
 
 	// Initialize DB
+	logger.Info("Checking Configuration...")
+	logger.Info("DATABASE_URL", "length", len(config.GetEnv("DATABASE_URL", "")))
+	logger.Info("PYTHON_EXTRACTOR_URL", "url", config.GetEnv("PYTHON_EXTRACTOR_URL", ""))
+	logger.Info("ALLOWED_ORIGINS", "origins", config.GetEnv("ALLOWED_ORIGINS", ""))
+
 	database.InitDB()
 
 	// Start background nutrition worker

@@ -21,18 +21,22 @@ func SetupRouter() *chi.Mux {
 	r.Use(middleware.Recoverer)
 
 	// CORS Configuration
-	allowedOrigins := []string{"http://localhost:5173", "http://127.0.0.1:5173"}
-	if origins := config.GetEnv("ALLOWED_ORIGINS", ""); origins != "" {
-		for _, origin := range strings.Split(origins, ",") {
-			allowedOrigins = append(allowedOrigins, strings.TrimSpace(origin))
+	allowedOrigins := []string{"http://localhost:5173", "http://127.0.0.1:5173", "https://pateproject.vercel.app"}
+	rawOrigins := config.GetEnv("ALLOWED_ORIGINS", "")
+	if rawOrigins != "" {
+		for _, origin := range strings.Split(rawOrigins, ",") {
+			cleanOrigin := strings.TrimSpace(origin)
+			if cleanOrigin != "" {
+				allowedOrigins = append(allowedOrigins, cleanOrigin)
+			}
 		}
 	}
-	fmt.Printf("CORS: Allowed Origins: %v\n", allowedOrigins)
+	fmt.Printf("CORS Final Allowed Origins: %v\n", allowedOrigins)
 
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-API-Key"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-API-Key", "X-Requested-With"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
 		MaxAge:           300,
