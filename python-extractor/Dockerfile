@@ -2,10 +2,12 @@ FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
 
 WORKDIR /app
 
-# Install system dependencies for psycopg2 and other tools
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
     libpq-dev \
+    tesseract-ocr \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install

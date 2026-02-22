@@ -15,3 +15,7 @@ greenlet>=3.0.0
 sqladmin
 itsdangerous
 flower
+pdfplumber
+opencv-python-headless
+pytesseract
+numpy
