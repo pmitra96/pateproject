@@ -1,0 +1,30 @@
+FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install Playwright browsers (Chromium only for efficiency)
+RUN playwright install chromium
+
+# Copy application code
+COPY . .
+
+# Ensure start.sh is executable
+RUN chmod +x start.sh
+
+# Cloud Run requires respecting the $PORT environment variable
+# We'll use a modified entrypoint or pass it to uvicorn in the deploy script
+EXPOSE 8080
+
+# For GCP, we might want to run uvicorn directly to ensure $PORT is respected correctly
+# without relying on a shell script that might swallow signals
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}

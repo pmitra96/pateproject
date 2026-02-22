@@ -1,11 +1,13 @@
 .PHONY: setup migrate-up migrate-down run-api run-worker run-redis test-scrape search-eggs dev help
 
 # Variables
-PYTHON = venv/bin/python
-PIP = venv/bin/pip
-ALEMBIC = venv/bin/alembic
-UVICORN = venv/bin/uvicorn
-CELERY = venv/bin/celery
+VENV_DIR = venv
+PYTHON = $(shell if [ -d $(VENV_DIR) ]; then echo $(VENV_DIR)/bin/python; else echo python3; fi)
+PIP = $(shell if [ -d $(VENV_DIR) ]; then echo $(VENV_DIR)/bin/pip; else echo pip3; fi)
+ALEMBIC = $(shell if [ -d $(VENV_DIR) ]; then echo $(VENV_DIR)/bin/alembic; else echo alembic; fi)
+UVICORN = $(shell if [ -d $(VENV_DIR) ]; then echo $(VENV_DIR)/bin/uvicorn; else echo uvicorn; fi)
+CELERY = $(shell if [ -d $(VENV_DIR) ]; then echo $(VENV_DIR)/bin/celery; else echo celery; fi)
+PORT ?= 8000
 
 help:
 	@echo "Available commands:"
@@ -36,12 +38,15 @@ migrate-down:
 	$(ALEMBIC) downgrade -1
 
 run-api:
-	$(UVICORN) app.main:app --host 0.0.0.0 --port 8000 --reload
+	$(UVICORN) app.main:app --host 0.0.0.0 --port $(PORT)
 
 dev: migrate-up run-api
 
 run-worker:
 	$(CELERY) -A app.worker.celery_app worker --loglevel=info -c 20
+
+prod-start: migrate-up
+	./start.sh
 
 run-redis:
 	docker run -d --name zepto-redis -p 6379:6379 redis:latest

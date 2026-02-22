@@ -1,9 +1,12 @@
 #!/bin/bash
 
-# Start Celery worker in the background
-echo "Starting Celery worker..."
-celery -A app.worker.celery_app worker --loglevel=info &
+# Use the port provided by environment or default to 7860 for HF
+export PORT=${PORT:-7860}
 
-# Start FastAPI server
-echo "Starting FastAPI server..."
-uvicorn app.main:app --host 0.0.0.0 --port 7860
+# Start Celery worker in the background using Makefile
+echo "Starting Celery worker via Makefile..."
+make run-worker &
+
+# Start FastAPI server using Makefile
+echo "Starting FastAPI server via Makefile..."
+make run-api

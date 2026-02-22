@@ -4,7 +4,7 @@ FROM golang:1.24.1-alpine AS builder
 WORKDIR /app
 
 # Install build dependencies
-RUN apk add --no-cache gcc musl-dev
+RUN apk add --no-cache gcc musl-dev make
 
 # Copy go mod and sum files
 COPY go.mod go.sum ./
@@ -13,23 +13,21 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application
-RUN CGO_ENABLED=1 GOOS=linux go build -o main ./cmd/server/main.go
+# Build the application via Makefile
+RUN make build
 
 # Final stage
 FROM alpine:latest
 
 WORKDIR /app
 
-# Install runtime dependencies (like certificates)
-RUN apk add --no-cache ca-certificates
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates make
 
-# Copy the binary from builder
+# Copy the binary and Makefile from builder
 COPY --from=builder /app/main .
-
-# Copy resources if needed (e.g., templates, static files)
-# COPY --from=builder /app/resources ./resources
+COPY --from=builder /app/Makefile .
 
 EXPOSE 8080
 
-CMD ["./main"]
+CMD ["make", "prod-run"]
