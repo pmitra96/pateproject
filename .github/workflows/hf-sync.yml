@@ -30,4 +30,4 @@ jobs:
           git remote add hf https://$HF_USERNAME:$HF_TOKEN@huggingface.co/spaces/$HF_USERNAME/$HF_SPACE_NAME
           
           # Push the python-extractor subdirectory to the root of the HF Space
-          git subtree push --prefix python-extractor hf main --force
+          git push hf `git subtree split --prefix=python-extractor HEAD`:main --force
