@@ -26,6 +26,12 @@ func SetupRouter() *chi.Mux {
 		w.Write([]byte(`{"status":"up"}`))
 	})
 
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"message":"PateProject Backend API up"}`))
+	})
+
 	// CORS Configuration
 	allowedOrigins := []string{"http://localhost:5173", "http://127.0.0.1:5173"}
 	if origins := config.GetEnv("ALLOWED_ORIGINS", ""); origins != "" {

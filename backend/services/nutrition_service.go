@@ -45,7 +45,7 @@ func (s *NutritionService) FetchItemNutrition(item *models.Item) error {
 }
 
 func (s *NutritionService) fetchFromPythonScraper(item *models.Item) error {
-	baseURL := config.GetEnv("SCRAPER_API_URL", "http://localhost:8000")
+	baseURL := config.GetEnv("PYTHON_EXTRACTOR_URL", "http://localhost:8081")
 
 	cleanProductName := strings.TrimSpace(item.ProductName)
 	brandName := ""
