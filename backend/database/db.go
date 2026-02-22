@@ -14,15 +14,18 @@ import (
 var DB *gorm.DB
 
 func InitDB() {
-	host := config.GetEnv("DB_HOST", "localhost")
-	user := config.GetEnv("DB_USER", "postgres")
-	password := config.GetEnv("DB_PASSWORD", "password")
-	dbname := config.GetEnv("DB_NAME", "pateproject")
-	port := config.GetEnv("DB_PORT", "5432")
-	sslmode := config.GetEnv("DB_SSLMODE", "disable")
+	dsn := config.GetEnv("DATABASE_URL", "")
+	if dsn == "" {
+		host := config.GetEnv("DB_HOST", "localhost")
+		user := config.GetEnv("DB_USER", "postgres")
+		password := config.GetEnv("DB_PASSWORD", "password")
+		dbname := config.GetEnv("DB_NAME", "pateproject")
+		port := config.GetEnv("DB_PORT", "5432")
+		sslmode := config.GetEnv("DB_SSLMODE", "disable")
 
-	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s",
-		host, user, password, dbname, port, sslmode)
+		dsn = fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s",
+			host, user, password, dbname, port, sslmode)
+	}
 
 	var err error
 	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})

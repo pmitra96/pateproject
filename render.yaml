@@ -1,0 +1,21 @@
+services:
+  # Go Backend
+  - type: web
+    name: pateproject-backend
+    env: docker
+    dockerContext: backend
+    dockerfilePath: backend/Dockerfile
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        sync: false # Requires Neon DB URL
+      - key: PYTHON_EXTRACTOR_URL
+        sync: false # Requires HF Space URL
+      - key: LLM_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false # e.g., https://pateproject.vercel.app
+
+  # Python Extractor (Alternative if not using Hugging Face)
+  # Note: Render free tier has 512MB RAM, which is often too low for Playwright.
+  # This is why the plan recommends Hugging Face Spaces for the extractor.
