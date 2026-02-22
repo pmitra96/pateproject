@@ -19,6 +19,13 @@ func SetupRouter() *chi.Mux {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
+	// Health Check
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"up"}`))
+	})
+
 	// CORS Configuration
 	allowedOrigins := []string{"http://localhost:5173", "http://127.0.0.1:5173"}
 	if origins := config.GetEnv("ALLOWED_ORIGINS", ""); origins != "" {
