@@ -17,9 +17,13 @@ from app.models import Product, Brand # Ensure models are imported for metadata 
 # access to the values within the .ini file in use.
 config = context.config
 
-# Use DATABASE_URL from .env
+# Use DATABASE_URL from .env or environment
+import os
 from dotenv import load_dotenv
-load_dotenv()
+
+# override=False ensures that if DATABASE_URL is already set in the 
+# environment (e.g., in Hugging Face Secrets), it is NOT overwritten by .env
+load_dotenv(override=False)
 
 db_url = os.getenv("DATABASE_URL")
 if db_url:
