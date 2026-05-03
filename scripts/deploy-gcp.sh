@@ -1,83 +1,229 @@
 #!/bin/bash
 
 # PateProject GCP Deployment Script
-# This script deploys the Backend and Extractor to Google Cloud Run.
-# It uses the Dockerfile.gcp artifacts to ensure the original deployment is not affected.
+# Deploys:
+#   1. Go Backend → Google Cloud Run
+#   2. React Frontend → Firebase Hosting (via gcloud)
+#
+# Usage:
+#   bash scripts/deploy-gcp.sh            # Deploy everything
+#   bash scripts/deploy-gcp.sh --backend  # Backend only
+#   bash scripts/deploy-gcp.sh --frontend # Frontend only
 
 set -e
 
-# Configuration
-PROJECT_ID=$(gcloud config get-value project)
-REGION="us-central1"
+GCLOUD_PATH="/Users/pushya/Downloads/google-cloud-sdk/bin/gcloud"
+PROJECT_ID=$($GCLOUD_PATH config get-value project)
+REGION="asia-southeast1"
 BACKEND_SERVICE="pateproject-backend"
-EXTRACTOR_SERVICE="pateproject-extractor"
 REPOSITORY="pateproject-repo"
 
 if [ -z "$PROJECT_ID" ]; then
-    echo "Error: GCP Project ID not set. Please run 'gcloud config set project [PROJECT_ID]'"
+    echo "Error: GCP Project ID not set."
+    echo "Run: $GCLOUD_PATH config set project [PROJECT_ID]"
     exit 1
 fi
 
-echo "Using Project ID: $PROJECT_ID"
-echo "Region: $REGION"
+echo "================================================"
+echo "  PateProject Deploy → GCP Project: $PROJECT_ID"
+echo "================================================"
 
-# 1. Create Artifact Registry if it doesn't exist
-if ! gcloud artifacts repositories describe $REPOSITORY --location=$REGION >/dev/null 2>&1; then
+# Parse flags
+DEPLOY_BACKEND=true
+DEPLOY_FRONTEND=true
+if [ "$1" == "--backend" ]; then
+    DEPLOY_FRONTEND=false
+elif [ "$1" == "--frontend" ]; then
+    DEPLOY_BACKEND=false
+fi
+
+# ── Load root .env ──────────────────────────────────────────────────────────
+ROOT_ENV="$(dirname "$0")/../.env"
+if [ -f "$ROOT_ENV" ]; then
+    echo "Loading secrets from $ROOT_ENV..."
+    export $(grep -v '^#' "$ROOT_ENV" | grep -v '^$' | xargs)
+fi
+
+# ── STEP 1: Ensure Artifact Registry exists ──────────────────────────────────
+if ! $GCLOUD_PATH artifacts repositories describe $REPOSITORY --location=$REGION >/dev/null 2>&1; then
     echo "Creating Artifact Registry repository: $REPOSITORY..."
-    gcloud artifacts repositories create $REPOSITORY \
+    $GCLOUD_PATH artifacts repositories create $REPOSITORY \
         --repository-format=docker \
         --location=$REGION \
         --description="Docker repository for PateProject"
 fi
 
-# 2. Build and Push Python Extractor
-echo "Building and Pushing Python Extractor..."
-EXTRACTOR_IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$EXTRACTOR_SERVICE"
-docker build -t $EXTRACTOR_IMAGE ./python-extractor -f python-extractor/Dockerfile.gcp
-docker push $EXTRACTOR_IMAGE
+# ── STEP 2: Docker login to Artifact Registry ────────────────────────────────
+echo ""
+echo "▶ Authenticating Docker with Artifact Registry..."
+# Bypass the gcloud credential helper (which requires gcloud in PATH)
+# by writing the auth token directly into Docker config
+ACCESS_TOKEN=$($GCLOUD_PATH auth print-access-token)
+mkdir -p ~/.docker
+# Remove any existing credHelpers entry for this registry and write a direct auth
+python3 -c "
+import json, base64, os
+config_path = os.path.expanduser('~/.docker/config.json')
+config = {}
+if os.path.exists(config_path):
+    with open(config_path) as f:
+        config = json.load(f)
+# Remove credHelper for this registry if present
+config.setdefault('credHelpers', {}).pop('$REGION-docker.pkg.dev', None)
+# Write direct auth token
+auth = base64.b64encode(f'oauth2accesstoken:$ACCESS_TOKEN'.encode()).decode()
+config.setdefault('auths', {})['$REGION-docker.pkg.dev'] = {'auth': auth}
+with open(config_path, 'w') as f:
+    json.dump(config, f, indent=2)
+print('Docker config updated')
+"
+# Also remove credsStore so Docker uses the auths section directly
+python3 -c "
+import json, os
+config_path = os.path.expanduser('~/.docker/config.json')
+with open(config_path) as f:
+    config = json.load(f)
+config.pop('credsStore', None)
+with open(config_path, 'w') as f:
+    json.dump(config, f, indent=2)
+"
+echo "  ✅ Docker authenticated"
 
-# 3. Build and Push Go Backend
-echo "Building and Pushing Go Backend..."
-BACKEND_IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$BACKEND_SERVICE"
-docker build -t $BACKEND_IMAGE ./backend -f backend/Dockerfile.gcp
-docker push $BACKEND_IMAGE
+# ── STEP 3: Ensure GCP Secrets exist ─────────────────────────────────────────
+echo ""
+echo "▶ Syncing secrets to GCP Secret Manager..."
 
-# 4. Deploy Extractor to Cloud Run
-echo "Deploying Extractor to Cloud Run..."
-gcloud run deploy $EXTRACTOR_SERVICE \
-    --image $EXTRACTOR_IMAGE \
-    --platform managed \
-    --region $REGION \
-    --allow-unauthenticated \
-    --memory 2Gi \
-    --cpu 1
+create_or_update_secret() {
+    local SECRET_NAME=$1
+    local SECRET_VALUE=$2
 
-# Get Extractor URL
-EXTRACTOR_URL=$(gcloud run services describe $EXTRACTOR_SERVICE --platform managed --region $REGION --format='value(status.url)')
-echo "Extractor deployed at: $EXTRACTOR_URL"
+    if [ -z "$SECRET_VALUE" ]; then
+        echo "  ⚠️  Skipping $SECRET_NAME (not set in .env)"
+        return
+    fi
 
-# 5. Deploy Backend to Cloud Run
-echo "Deploying Backend to Cloud Run..."
-# Note: You should have set up secrets in GCP Secret Manager for DATABASE_URL, LLM_API_KEY, etc.
-# For the first run, we'll deploy with basic env vars. Recommended: use --set-secrets thereafter.
-gcloud run deploy $BACKEND_SERVICE \
-    --image $BACKEND_IMAGE \
-    --platform managed \
-    --region $REGION \
-    --allow-unauthenticated \
-    --set-env-vars "PYTHON_EXTRACTOR_URL=$EXTRACTOR_URL"
+    if $GCLOUD_PATH secrets describe "$SECRET_NAME" >/dev/null 2>&1; then
+        echo "  ↻  Updating secret: $SECRET_NAME"
+        echo -n "$SECRET_VALUE" | $GCLOUD_PATH secrets versions add "$SECRET_NAME" --data-file=-
+    else
+        echo "  +  Creating secret: $SECRET_NAME"
+        echo -n "$SECRET_VALUE" | $GCLOUD_PATH secrets create "$SECRET_NAME" --data-file=-
+    fi
+}
 
-BACKEND_URL=$(gcloud run services describe $BACKEND_SERVICE --platform managed --region $REGION --format='value(status.url)')
+create_or_update_secret "DATABASE_URL" "$DATABASE_URL"
+create_or_update_secret "LLM_API_KEY" "$LLM_API_KEY"
+create_or_update_secret "INGESTION_API_KEY" "$INGESTION_API_KEY"
+create_or_update_secret "ALLOWED_ORIGINS" "$ALLOWED_ORIGINS"
+create_or_update_secret "WHATSAPP_VERIFY_TOKEN" "$WHATSAPP_VERIFY_TOKEN"
+create_or_update_secret "WHATSAPP_ACCESS_TOKEN" "$WHATSAPP_ACCESS_TOKEN"
+create_or_update_secret "WHATSAPP_PHONE_NUMBER_ID" "$WHATSAPP_PHONE_NUMBER_ID"
+create_or_update_secret "JWT_SECRET" "$JWT_SECRET"
 
-echo "---------------------------------------------------"
-echo "Deployment Complete!"
-echo "Backend URL: $BACKEND_URL"
-echo "Extractor URL: $EXTRACTOR_URL"
+# ── STEP 4: Deploy Backend ────────────────────────────────────────────────────
+if [ "$DEPLOY_BACKEND" = true ]; then
+    echo ""
+    echo "▶ Building and pushing Go Backend (linux/amd64)..."
+    BACKEND_IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$BACKEND_SERVICE"
+    docker build --platform linux/amd64 -t $BACKEND_IMAGE ./backend -f backend/Dockerfile.gcp
+    docker push $BACKEND_IMAGE
+
+    echo "▶ Deploying Backend to Cloud Run..."
+    $GCLOUD_PATH run deploy $BACKEND_SERVICE \
+        --image $BACKEND_IMAGE \
+        --platform managed \
+        --region $REGION \
+        --allow-unauthenticated \
+        --memory 512Mi \
+        --cpu 1 \
+        --set-secrets="DATABASE_URL=DATABASE_URL:latest,LLM_API_KEY=LLM_API_KEY:latest,INGESTION_API_KEY=INGESTION_API_KEY:latest,ALLOWED_ORIGINS=ALLOWED_ORIGINS:latest,WHATSAPP_VERIFY_TOKEN=WHATSAPP_VERIFY_TOKEN:latest,WHATSAPP_ACCESS_TOKEN=WHATSAPP_ACCESS_TOKEN:latest,WHATSAPP_PHONE_NUMBER_ID=WHATSAPP_PHONE_NUMBER_ID:latest,JWT_SECRET=JWT_SECRET:latest"
+
+    BACKEND_URL=$($GCLOUD_PATH run services describe $BACKEND_SERVICE --platform managed --region $REGION --format='value(status.url)')
+    echo "  ✅ Backend deployed: $BACKEND_URL"
+fi
+
+# ── STEP 4: Deploy Frontend to Firebase Hosting ───────────────────────────────
+if [ "$DEPLOY_FRONTEND" = true ]; then
+    echo ""
+    echo "▶ Setting up Firebase Hosting..."
+
+    # Install Firebase CLI if not present
+    if ! command -v firebase &>/dev/null; then
+        echo "  Installing Firebase CLI..."
+        npm install -g firebase-tools
+    fi
+
+    # Determine backend URL
+    if [ -z "$BACKEND_URL" ]; then
+        BACKEND_URL=$($GCLOUD_PATH run services describe $BACKEND_SERVICE --platform managed --region $REGION --format='value(status.url)' 2>/dev/null || echo "")
+    fi
+
+    if [ -z "$BACKEND_URL" ]; then
+        echo "  ⚠️  Could not determine backend URL. Set VITE_API_BASE_URL manually in frontend/.env.production"
+    else
+        echo "  Backend URL: $BACKEND_URL"
+    fi
+
+    # Write frontend production .env
+    FRONTEND_ENV="./frontend/.env.production"
+    echo "  Writing $FRONTEND_ENV..."
+    cat > "$FRONTEND_ENV" << EOF
+VITE_API_BASE_URL=$BACKEND_URL
+VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID:-$VITE_GOOGLE_CLIENT_ID}
+EOF
+
+    # Build the frontend
+    echo "  Building React app..."
+    cd frontend
+    npm install --silent
+    npm run build
+    cd ..
+
+    # Initialize Firebase if no .firebaserc exists
+    if [ ! -f ".firebaserc" ]; then
+        echo ""
+        echo "  ⚙️  First-time Firebase setup required."
+        echo "  Running: firebase init hosting"
+        echo "  - Select project: $PROJECT_ID"
+        echo "  - Public directory: frontend/dist"
+        echo "  - Single-page app: Yes"
+        echo "  - Don't overwrite dist/index.html"
+        echo ""
+        firebase login
+        firebase init hosting --project $PROJECT_ID
+    fi
+
+    echo "  Deploying to Firebase Hosting..."
+    firebase deploy --only hosting --project $PROJECT_ID
+
+    HOSTING_URL="https://$PROJECT_ID.web.app"
+    echo "  ✅ Frontend deployed: $HOSTING_URL"
+
+    # Update backend ALLOWED_ORIGINS with the Firebase URL
+    echo ""
+    echo "  Updating ALLOWED_ORIGINS to include Firebase URL..."
+    UPDATED_ORIGINS="${ALLOWED_ORIGINS:+$ALLOWED_ORIGINS,}$HOSTING_URL"
+    echo -n "$UPDATED_ORIGINS" | $GCLOUD_PATH secrets versions add "ALLOWED_ORIGINS" --data-file=-
+    $GCLOUD_PATH run services update $BACKEND_SERVICE \
+        --region $REGION \
+        --update-secrets="ALLOWED_ORIGINS=ALLOWED_ORIGINS:latest"
+    echo "  ✅ CORS updated."
+fi
+
+# ── SUMMARY ───────────────────────────────────────────────────────────────────
+echo ""
+echo "================================================"
+echo "  🚀 Deployment Complete!"
+if [ "$DEPLOY_BACKEND" = true ] && [ -n "$BACKEND_URL" ]; then
+    echo "  Backend:  $BACKEND_URL"
+fi
+if [ "$DEPLOY_FRONTEND" = true ]; then
+    echo "  Frontend: https://$PROJECT_ID.web.app"
+fi
+echo "================================================"
 echo ""
 echo "NEXT STEPS:"
-echo "1. Configure Secrets in GCP Secret Manager (DATABASE_URL, LLM_API_KEY)."
-echo "2. Update $BACKEND_SERVICE to use these secrets:"
-echo "   gcloud run services update $BACKEND_SERVICE --set-secrets DATABASE_URL=DATABASE_URL:latest,LLM_API_KEY=LLM_API_KEY:latest"
-echo "3. Initialize Firebase for the frontend and deploy:"
-echo "   cd frontend && firebase init"
-echo "---------------------------------------------------"
+echo "  1. Add your Firebase Hosting URL to Google OAuth allowed origins"
+echo "     → https://console.cloud.google.com/apis/credentials"
+echo "  2. Test: curl $BACKEND_URL/health"
+echo "================================================"

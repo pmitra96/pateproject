@@ -54,6 +54,9 @@ func InitDB() {
 		&models.RemainingDayState{},
 		&models.GoalMacroProfile{},
 		&models.ControlModeTransition{},
+		&models.OTP{},
+		&models.LLMUsageLog{},
+		&models.IngredientMapping{},
 	)
 	if err != nil {
 		log.Fatal("Failed to migrate database: ", err)

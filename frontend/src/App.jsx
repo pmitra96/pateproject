@@ -24,6 +24,8 @@ import {
   fetchRemainingDayState,
   setGoalMacroTargets,
   checkFoodPermission,
+  requestWhatsAppOTP,
+  verifyWhatsAppOTP,
   // validateMeal,
   API_BASE,
   fetchOrders,
@@ -34,6 +36,7 @@ import RemainingDayPanel from './components/RemainingDayPanel';
 import MealBlockedBanner from './components/MealBlockedBanner';
 import MacroTargetModal from './components/MacroTargetModal';
 import CanIEatModal from './components/CanIEatModal';
+import LandingPage from './components/LandingPage';
 
 const getDefaultMealType = () => {
   const hour = new Date().getHours();
@@ -95,19 +98,18 @@ function App() {
 
 
   // User preferences state
+  const [userPreferences, setUserPreferences] = useState(null);
   const [showPreferencesModal, setShowPreferencesModal] = useState(false);
-  const [userPreferences, setUserPreferences] = useState({
-    country: '',
-    state: '',
-    city: '',
-    preferred_cuisines: []
-  });
   const [preferencesForm, setPreferencesForm] = useState({
-    country: '',
-    state: '',
-    city: '',
-    preferred_cuisines: []
+    country: '', state: '', city: '', preferred_cuisines: []
   });
+
+  // WhatsApp Login State
+  const [showWALogin, setShowWALogin] = useState(false);
+  const [waStep, setWaStep] = useState(1); // 1: Phone, 2: OTP
+  const [waPhone, setWaPhone] = useState('');
+  const [waOTP, setWaOTP] = useState('');
+  const [waLoading, setWaLoading] = useState(false);
   const [newCuisine, setNewCuisine] = useState('');
 
   // Manual item add state
@@ -707,7 +709,117 @@ function App() {
     }
   };
 
+  const handleWARequestOTP = async () => {
+    if (!waPhone.trim()) return alert("Please enter your phone number with country code (e.g. 919876543210)");
+    setWaLoading(true);
+    try {
+      await requestWhatsAppOTP(waPhone);
+      setWaStep(2);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setWaLoading(false);
+    }
+  };
 
+  const handleWAVerifyOTP = async () => {
+    if (!waOTP.trim()) return alert("Please enter the 6-digit code");
+    setWaLoading(true);
+    try {
+      const data = await verifyWhatsAppOTP(waPhone, waOTP);
+      setUser(data.user);
+      localStorage.setItem('token', data.token);
+      setShowWALogin(false);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setWaLoading(false);
+    }
+  };
+
+  if (!user) {
+    return (
+      <div className="App">
+        <LandingPage onLoginClick={() => setShowWALogin(true)} />
+        
+        {/* WhatsApp Login Modal - Keep it accessible from Landing Page */}
+        {showWALogin && (
+          <div className="modal-overlay" onClick={() => setShowWALogin(false)} style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(8px)', backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 2000 }}>
+            <div className="modal-content glass-panel" onClick={e => e.stopPropagation()} style={{ maxWidth: '400px', width: '90%', padding: '2rem', borderRadius: '24px', textAlign: 'center', background: 'var(--card-bg)' }}>
+              <div style={{ background: '#25D366', width: '60px', height: '60px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem', boxShadow: '0 8px 24px rgba(37, 211, 102, 0.4)' }}>
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12.031 0C5.394 0 0 5.393 0 12.03c0 2.12.551 4.195 1.597 6.015L.085 24l6.115-1.604c1.748.96 3.738 1.468 5.828 1.468h.005c6.634 0 12.03-5.392 12.03-12.031S18.67 0 12.031 0zm0 21.86c-1.785 0-3.535-.48-5.068-1.39l-.363-.216-3.766.988.995-3.67-.236-.376A9.972 9.972 0 0 1 2.05 12.03c0-5.522 4.494-10.016 10.017-10.016 5.522 0 10.018 4.493 10.018 10.015 0 5.523-4.496 10.016-10.018 10.016zm5.498-7.513c-.301-.15-1.785-.88-2.061-.98-.277-.1-.478-.15-.678.15-.202.302-.78 1.026-.957 1.237-.175.21-.35.236-.653.086-.301-.15-1.272-.469-2.424-1.495-.898-.8-1.503-1.788-1.68-2.09-.176-.302-.02-.466.13-.616.136-.137.302-.352.453-.528.15-.176.202-.301.302-.503.1-.201.05-.377-.025-.528-.076-.15-.678-1.632-.93-2.235-.246-.59-.496-.51-.678-.52-.176-.01-.377-.01-.578-.01-.2 0-.528.076-.803.377-.277.301-1.055 1.03-1.055 2.513 0 1.483 1.08 2.915 1.23 3.116.15.201 2.124 3.242 5.143 4.544 2.146.924 2.87.973 3.974.82 1.127-.156 3.565-1.458 4.066-2.864.503-1.407.503-2.614.353-2.865-.15-.251-.553-.402-.854-.553z" />
+                </svg>
+              </div>
+              <h2 className="mb-2" style={{ fontWeight: 700, fontSize: '1.5rem' }}>Login with WhatsApp</h2>
+              <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'center' }}>
+                <GoogleLogin
+                  onSuccess={cred => {
+                    const decoded = jwtDecode(cred.credential);
+                    setUser(decoded);
+                    localStorage.setItem('token', cred.credential);
+                    setShowWALogin(false);
+                  }}
+                  onError={() => console.log('Login Failed')}
+                />
+              </div>
+              <div style={{ margin: '1rem 0', display: 'flex', alignItems: 'center', color: '#999', fontSize: '0.8rem' }}>
+                <div style={{ flex: 1, height: '1px', background: '#eee' }}></div>
+                <div style={{ padding: '0 0.5rem' }}>OR</div>
+                <div style={{ flex: 1, height: '1px', background: '#eee' }}></div>
+              </div>
+              {waStep === 1 ? (
+                <>
+                  <p className="text-secondary mb-6" style={{ fontSize: '0.9rem', lineHeight: 1.5 }}>
+                    Enter your phone number starting with the country code.
+                  </p>
+                  <div className="mb-6 text-left">
+                    <input
+                      type="tel"
+                      className="w-full"
+                      placeholder="919876543210"
+                      value={waPhone}
+                      onChange={e => setWaPhone(e.target.value)}
+                      style={{ padding: '1rem', borderRadius: '12px', border: '1px solid var(--border-color)', background: 'var(--bg-color)', fontSize: '1.1rem', textAlign: 'center', letterSpacing: '1px', fontWeight: 600 }}
+                    />
+                  </div>
+                  <div className="flex-between" style={{ gap: '1rem' }}>
+                    <button className="btn btn-secondary" style={{ flex: 1, padding: '0.8rem', borderRadius: '12px' }} onClick={() => setShowWALogin(false)}>Cancel</button>
+                    <button className="btn" style={{ flex: 1, padding: '0.8rem', borderRadius: '12px', background: 'linear-gradient(135deg, #25D366 0%, #128C7E 100%)', color: 'white' }} onClick={handleWARequestOTP} disabled={waLoading}>
+                      {waLoading ? 'Sending...' : 'Send OTP'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-secondary mb-6" style={{ fontSize: '0.9rem', lineHeight: 1.5 }}>
+                    Code sent to <strong>+{waPhone}</strong>.
+                  </p>
+                  <div className="mb-6 text-left">
+                    <input
+                      type="text"
+                      className="w-full"
+                      placeholder="• • • • • •"
+                      maxLength={6}
+                      value={waOTP}
+                      onChange={e => setWaOTP(e.target.value.replace(/\D/g, ''))}
+                      style={{ padding: '1rem', borderRadius: '12px', border: '1px solid var(--border-color)', background: 'var(--bg-color)', fontSize: '1.5rem', textAlign: 'center', letterSpacing: '8px', fontWeight: 700 }}
+                    />
+                  </div>
+                  <div className="flex-between" style={{ gap: '1rem' }}>
+                    <button className="btn btn-secondary" style={{ flex: 1, padding: '0.8rem', borderRadius: '12px' }} onClick={() => setWaStep(1)}>Back</button>
+                    <button className="btn" style={{ flex: 1, padding: '0.8rem', borderRadius: '12px', background: 'linear-gradient(135deg, #25D366 0%, #128C7E 100%)', color: 'white' }} onClick={handleWAVerifyOTP} disabled={waLoading || waOTP.length < 6}>
+                      {waLoading ? 'Verifying...' : 'Login'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="App">
@@ -728,14 +840,23 @@ function App() {
               </button>
             </>
           ) : (
-            <GoogleLogin
-              onSuccess={cred => {
-                const decoded = jwtDecode(cred.credential);
-                setUser(decoded);
-                localStorage.setItem('token', cred.credential);
-              }}
-              onError={() => console.log('Login Failed')}
-            />
+            <>
+              <button 
+                className="btn" 
+                style={{ background: '#25D366', color: 'white' }}
+                onClick={() => { setWaStep(1); setWaPhone(''); setWaOTP(''); setShowWALogin(true); }}
+              >
+                📱 Login with WhatsApp
+              </button>
+              <GoogleLogin
+                onSuccess={cred => {
+                  const decoded = jwtDecode(cred.credential);
+                  setUser(decoded);
+                  localStorage.setItem('token', cred.credential);
+                }}
+                onError={() => console.log('Login Failed')}
+              />
+            </>
           )}
         </div>
       </header>
@@ -1291,6 +1412,26 @@ function App() {
                               {new Date(meal.logged_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </div>
                             <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem', paddingRight: '1.5rem' }}>{meal.name}</h4>
+                            {meal.ingredients && (
+                              <div style={{ 
+                                fontSize: '0.75rem', 
+                                color: 'var(--text-secondary)', 
+                                marginBottom: '0.5rem', 
+                                fontStyle: 'italic',
+                                display: '-webkit-box',
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: 'vertical',
+                                overflow: 'hidden'
+                              }}>
+                                {(() => {
+                                  if (typeof meal.ingredients !== 'string') return '';
+                                  if (meal.ingredients.startsWith('[')) {
+                                    try { return JSON.parse(meal.ingredients).join(', '); } catch { return meal.ingredients; }
+                                  }
+                                  return meal.ingredients;
+                                })()}
+                              </div>
+                            )}
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                               <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9' }}>🔥 {meal.calories?.toFixed(0)}</span>
                               <span className="badge" style={{ background: '#dcfce7', color: '#15803d' }}>💪 {meal.protein?.toFixed(1)}g</span>
@@ -1617,9 +1758,21 @@ function App() {
                 <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-color)' }}>Ingredients</div>
                 <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
                   {(() => {
-                    const ings = typeof selectedMeal.ingredients === 'string'
-                      ? JSON.parse(selectedMeal.ingredients || '[]')
-                      : selectedMeal.ingredients || [];
+                    let ings = [];
+                    if (typeof selectedMeal.ingredients === 'string' && selectedMeal.ingredients) {
+                      if (selectedMeal.ingredients.startsWith('[')) {
+                        try {
+                          ings = JSON.parse(selectedMeal.ingredients);
+                          if (!Array.isArray(ings)) ings = [selectedMeal.ingredients];
+                        } catch {
+                          ings = [selectedMeal.ingredients];
+                        }
+                      } else {
+                        ings = [selectedMeal.ingredients];
+                      }
+                    } else {
+                      ings = selectedMeal.ingredients || [];
+                    }
                     return ings.map((ing, i) => (
                       <li key={i} className="text-secondary" style={{ marginBottom: '0.25rem' }}>{ing}</li>
                     ));
@@ -2049,7 +2202,67 @@ function App() {
           alert("Please adjust quantity to be smaller.");
         }}
       />
-    </div >
+      {/* WhatsApp Login Modal */}
+      {showWALogin && (
+        <div className="modal-overlay" onClick={() => setShowWALogin(false)} style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(8px)', backgroundColor: 'rgba(0,0,0,0.6)' }}>
+          <div className="modal-content glass-panel" onClick={e => e.stopPropagation()} style={{ maxWidth: '400px', width: '90%', padding: '2rem', borderRadius: '24px', textAlign: 'center', background: 'var(--card-bg)' }}>
+            <div style={{ background: '#25D366', width: '60px', height: '60px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem', boxShadow: '0 8px 24px rgba(37, 211, 102, 0.4)' }}>
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12.031 0C5.394 0 0 5.393 0 12.03c0 2.12.551 4.195 1.597 6.015L.085 24l6.115-1.604c1.748.96 3.738 1.468 5.828 1.468h.005c6.634 0 12.03-5.392 12.03-12.031S18.67 0 12.031 0zm0 21.86c-1.785 0-3.535-.48-5.068-1.39l-.363-.216-3.766.988.995-3.67-.236-.376A9.972 9.972 0 0 1 2.05 12.03c0-5.522 4.494-10.016 10.017-10.016 5.522 0 10.018 4.493 10.018 10.015 0 5.523-4.496 10.016-10.018 10.016zm5.498-7.513c-.301-.15-1.785-.88-2.061-.98-.277-.1-.478-.15-.678.15-.202.302-.78 1.026-.957 1.237-.175.21-.35.236-.653.086-.301-.15-1.272-.469-2.424-1.495-.898-.8-1.503-1.788-1.68-2.09-.176-.302-.02-.466.13-.616.136-.137.302-.352.453-.528.15-.176.202-.301.302-.503.1-.201.05-.377-.025-.528-.076-.15-.678-1.632-.93-2.235-.246-.59-.496-.51-.678-.52-.176-.01-.377-.01-.578-.01-.2 0-.528.076-.803.377-.277.301-1.055 1.03-1.055 2.513 0 1.483 1.08 2.915 1.23 3.116.15.201 2.124 3.242 5.143 4.544 2.146.924 2.87.973 3.974.82 1.127-.156 3.565-1.458 4.066-2.864.503-1.407.503-2.614.353-2.865-.15-.251-.553-.402-.854-.553z" />
+              </svg>
+            </div>
+            <h2 className="mb-2" style={{ fontWeight: 700, fontSize: '1.5rem' }}>Login with WhatsApp</h2>
+            {waStep === 1 ? (
+              <>
+                <p className="text-secondary mb-6" style={{ fontSize: '0.9rem', lineHeight: 1.5 }}>
+                  Enter your phone number starting with the country code (e.g., <strong style={{ color: 'var(--text-primary)' }}>91</strong>9876543210).
+                </p>
+                <div className="mb-6 text-left">
+                  <input
+                    type="tel"
+                    className="w-full"
+                    placeholder="919876543210"
+                    value={waPhone}
+                    onChange={e => setWaPhone(e.target.value)}
+                    style={{ padding: '1rem', borderRadius: '12px', border: '1px solid var(--border-color)', background: 'var(--bg-color)', fontSize: '1.1rem', textAlign: 'center', letterSpacing: '1px', fontWeight: 600 }}
+                  />
+                </div>
+                <div className="flex-between" style={{ gap: '1rem' }}>
+                  <button className="btn btn-secondary" style={{ flex: 1, padding: '0.8rem', borderRadius: '12px' }} onClick={() => setShowWALogin(false)}>Cancel</button>
+                  <button className="btn" style={{ flex: 1, padding: '0.8rem', borderRadius: '12px', background: 'linear-gradient(135deg, #25D366 0%, #128C7E 100%)', color: 'white', boxShadow: '0 4px 12px rgba(37, 211, 102, 0.3)' }} onClick={handleWARequestOTP} disabled={waLoading}>
+                    {waLoading ? 'Sending...' : 'Send Code'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-secondary mb-6" style={{ fontSize: '0.9rem', lineHeight: 1.5 }}>
+                  We've sent a secure 6-digit code to <strong style={{ color: 'var(--text-primary)' }}>+{waPhone}</strong>.
+                </p>
+                <div className="mb-6 text-left">
+                  <input
+                    type="text"
+                    className="w-full"
+                    placeholder="• • • • • •"
+                    maxLength={6}
+                    value={waOTP}
+                    onChange={e => setWaOTP(e.target.value.replace(/\D/g, ''))}
+                    style={{ padding: '1rem', borderRadius: '12px', border: '1px solid var(--border-color)', background: 'var(--bg-color)', fontSize: '1.5rem', textAlign: 'center', letterSpacing: '8px', fontWeight: 700 }}
+                  />
+                </div>
+                <div className="flex-between" style={{ gap: '1rem' }}>
+                  <button className="btn btn-secondary" style={{ flex: 1, padding: '0.8rem', borderRadius: '12px' }} onClick={() => setWaStep(1)}>Back</button>
+                  <button className="btn" style={{ flex: 1, padding: '0.8rem', borderRadius: '12px', background: 'linear-gradient(135deg, #25D366 0%, #128C7E 100%)', color: 'white', boxShadow: '0 4px 12px rgba(37, 211, 102, 0.3)' }} onClick={handleWAVerifyOTP} disabled={waLoading || waOTP.length < 6}>
+                    {waLoading ? 'Verifying...' : 'Login'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+    </div>
   );
 }
 

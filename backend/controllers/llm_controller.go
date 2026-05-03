@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/pmitra96/pateproject/database"
 	"github.com/pmitra96/pateproject/llm"
@@ -57,7 +58,21 @@ func SuggestMeal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := llm.NewClient()
-	suggestions, err := client.SuggestMeals(req.Inventory)
+	suggestions, usage, err := client.SuggestMeals(req.Inventory)
+	
+	// Log usage if user is authenticated (SuggestMeal is public currently, but let's try to get userID if possible)
+	userID, _ := getUserID(r)
+	if userID != 0 {
+		database.DB.Create(&models.LLMUsageLog{
+			UserID:           userID,
+			Model:            "gpt-4o-mini",
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			TotalTokens:      usage.TotalTokens,
+			Feature:          "meal_suggestion",
+			CreatedAt:        time.Now(),
+		})
+	}
 
 	if err != nil {
 		logger.Error("Failed to generate meal suggestions", "error", err)
@@ -166,7 +181,18 @@ func SuggestMealPersonalized(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := llm.NewClient()
-	suggestions, err := client.SuggestMealsPersonalized(req.Inventory, req.Goals, req.TimeOfDay, preferencesInfo, dishSamples)
+	suggestions, usage, err := client.SuggestMealsPersonalized(req.Inventory, req.Goals, req.TimeOfDay, preferencesInfo, dishSamples)
+
+	// Log usage
+	database.DB.Create(&models.LLMUsageLog{
+		UserID:           userID,
+		Model:            "gpt-4o-mini",
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
+		Feature:          "meal_suggestion_personalized",
+		CreatedAt:        time.Now(),
+	})
 
 	if err != nil {
 		logger.Error("Failed to generate personalized meal suggestions", "error", err)
@@ -214,7 +240,21 @@ func ChatBot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := llm.NewClient()
-	response, err := client.ChatWithContext(req.Message, req.History, req.Inventory, req.Goals)
+	response, usage, err := client.ChatWithContext(req.Message, req.History, req.Inventory, req.Goals)
+	
+	// Log usage if user is authenticated
+	userID, _ := getUserID(r)
+	if userID != 0 {
+		database.DB.Create(&models.LLMUsageLog{
+			UserID:           userID,
+			Model:            "gpt-4o-mini",
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			TotalTokens:      usage.TotalTokens,
+			Feature:          "chatbot",
+			CreatedAt:        time.Now(),
+		})
+	}
 
 	if err != nil {
 		logger.Error("Failed to get chatbot response", "error", err)

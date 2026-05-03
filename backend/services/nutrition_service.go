@@ -263,7 +263,7 @@ Return ONLY a JSON object:
 		return "Unknown"
 	}(), item.Ingredient.Name, item.Unit)
 
-	resp, err := s.llmClient.Chat([]llm.Message{
+	resp, _, err := s.llmClient.Chat([]llm.Message{
 		{Role: "system", Content: fmt.Sprintf("You are a nutrition expert. Provide estimated nutritional data %s. If brand info is unavailable, use average values for the ingredient.", unitType)},
 		{Role: "user", Content: prompt},
 	})
@@ -325,18 +325,40 @@ Return ONLY a JSON object:
 	return nil
 }
 
-// EstimateNutritionFromQuery estimates nutrition from a text query
-// It first checks the database for a matching item, then falls back to LLM
-func (s *NutritionService) EstimateNutritionFromQuery(query string) (*FoodEstimate, error) {
+// EstimateNutritionFromQuery estimates nutrition from a text query.
+// It prioritizes checking the user's pantry first, then the global database, then LLM.
+func (s *NutritionService) EstimateNutritionFromQuery(userID uint, query string) (*FoodEstimate, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("empty query")
 	}
 
-	// 1. Search DB for exact or close match
-	// We'll search Items table.
+	// 0. Check User's Pantry First
+	if userID > 0 {
+		var pi models.PantryItem
+		// Try to extract the ingredient name from query via AI for best mapping
+		extraction, _ := s.llmClient.ExtractPantryItemInfo(query)
+		if extraction != nil && extraction.Ingredient != "" {
+			err := database.DB.Preload("Item").
+				Joins("JOIN ingredients ON ingredients.id = pantry_items.ingredient_id").
+				Where("pantry_items.user_id = ? AND LOWER(ingredients.name) = ?", userID, strings.ToLower(extraction.Ingredient)).
+				First(&pi).Error
+			
+			if err == nil && pi.Item.Calories > 0 {
+				logger.Info("Found brand-specific match in user pantry", "user_id", userID, "ingredient", extraction.Ingredient, "item", pi.Item.Name)
+				return &FoodEstimate{
+					Calories: pi.Item.Calories,
+					Protein:  pi.Item.Protein,
+					Fat:      pi.Item.Fat,
+					Carbs:    pi.Item.Carbs,
+					Name:     pi.Item.Name,
+				}, nil
+			}
+		}
+	}
+
+	// 1. Search Global DB for match
 	var item models.Item
-	// Try simplified search: Name ILIKE query
 	err := database.DB.Where("name ILIKE ?", query).Or("product_name ILIKE ?", query).Order("nutrition_verified DESC").First(&item).Error
 	if err == nil {
 		// Found it! use its macros
@@ -378,7 +400,7 @@ Return ONLY a JSON object:
 }`, query)
 
 	// Using the same client
-	resp, err := s.llmClient.Chat([]llm.Message{
+	resp, _, err := s.llmClient.Chat([]llm.Message{
 		{Role: "system", Content: "You are a nutrition expert. Provide estimated nutritional data. Be conservative but realistic."},
 		{Role: "user", Content: prompt},
 	})

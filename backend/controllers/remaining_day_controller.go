@@ -78,9 +78,6 @@ func ComputeRemainingDayState(userID uint, date time.Time) (*models.RemainingDay
 	// Implementation: Check existing state for the day. If it was DAMAGE_CONTROL, keep it.
 	var existingState models.RemainingDayState
 	if err := database.DB.Where("user_id = ? AND date = ?", userID, startOfDay).First(&existingState).Error; err == nil {
-		if existingState.ControlMode == "DAMAGE_CONTROL" {
-			controlMode = "DAMAGE_CONTROL"
-		}
 		// Also check for audit log if mode changed (new != old)
 		if existingState.ControlMode != controlMode {
 			// Log transition
@@ -123,12 +120,22 @@ func ComputeRemainingDayState(userID uint, date time.Time) (*models.RemainingDay
 		LastComputedAt:    time.Now(),
 	}
 
-	// Upsert
-	if err := database.DB.Where("user_id = ? AND date = ?", userID, startOfDay).Assign(state).FirstOrCreate(&state).Error; err != nil {
+	// Upsert State
+	var existing models.RemainingDayState
+	err := database.DB.Where("user_id = ? AND date = ?", userID, startOfDay).First(&existing).Error
+	if err == gorm.ErrRecordNotFound {
+		if err := database.DB.Create(&state).Error; err != nil {
+			return nil, err
+		}
+	} else if err == nil {
+		state.ID = existing.ID
+		state.CreatedAt = existing.CreatedAt // Preserve creation time
+		if err := database.DB.Save(&state).Error; err != nil {
+			return nil, err
+		}
+	} else {
 		return nil, err
 	}
-	// Re-save to ensure updates if it existed
-	database.DB.Save(&state)
 
 	return &state, nil
 }
@@ -209,12 +216,25 @@ func SetGoalMacroTargets(w http.ResponseWriter, r *http.Request) {
 		DamageControlFloorCalories: req.DamageControlFloorCalories,
 	}
 
-	// Upsert
-	if err := database.DB.Where("goal_id = ?", goalID).Assign(profile).FirstOrCreate(&profile).Error; err != nil {
-		http.Error(w, "Failed to save targets", http.StatusInternalServerError)
+	// Upsert Profile
+	var existingProfile models.GoalMacroProfile
+	err = database.DB.Where("goal_id = ?", goalID).First(&existingProfile).Error
+	if err == gorm.ErrRecordNotFound {
+		if err := database.DB.Create(&profile).Error; err != nil {
+			http.Error(w, "Failed to save targets", http.StatusInternalServerError)
+			return
+		}
+	} else if err == nil {
+		profile.ID = existingProfile.ID
+		profile.CreatedAt = existingProfile.CreatedAt // Preserve creation time
+		if err := database.DB.Save(&profile).Error; err != nil {
+			http.Error(w, "Failed to save targets", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		http.Error(w, "Failed to query targets", http.StatusInternalServerError)
 		return
 	}
-	database.DB.Save(&profile)
 	// Touch the goal to make it the most recently updated (active) one
 	database.DB.Model(&models.Goal{ID: uint(goalID)}).Updates(map[string]interface{}{
 		"updated_at": time.Now(),
@@ -311,7 +331,7 @@ func CheckFoodPermissionHandler(w http.ResponseWriter, r *http.Request) {
 	if req.Query != "" {
 		// Use automatic estimation
 		ns := services.NewNutritionService()
-		estimated, err := ns.EstimateNutritionFromQuery(req.Query)
+		estimated, err := ns.EstimateNutritionFromQuery(userID, req.Query)
 		if err != nil {
 			logger.Error("Failed to estimate nutrition", "query", req.Query, "error", err)
 			http.Error(w, "Failed to estimate nutrition for: "+req.Query, http.StatusInternalServerError)
@@ -346,6 +366,25 @@ func CheckFoodPermissionHandler(w http.ResponseWriter, r *http.Request) {
 		Food             services.FoodEstimate     `json:"food"`
 		CurrentState     models.RemainingDayState  `json:"current_state"`
 		SimulatedState   models.RemainingDayState  `json:"simulated_state"`
+	}
+
+	// Fetch active profile to get damage floor for accurate simulation
+	var goal models.Goal
+	var profile models.GoalMacroProfile
+	damageFloor := 0.0
+	if err := database.DB.Where("user_id = ? AND is_active = ?", userID, true).Order("updated_at desc").First(&goal).Error; err == nil {
+		if err := database.DB.Where("goal_id = ?", goal.ID).First(&profile).Error; err == nil {
+			damageFloor = float64(profile.DamageControlFloorCalories)
+		}
+	}
+
+	simCalTarget := float64(simulatedState.TargetCalories)
+	if simulatedState.RemainingCalories < damageFloor {
+		simulatedState.ControlMode = "DAMAGE_CONTROL"
+	} else if simulatedState.RemainingCalories < (simCalTarget * 0.20) {
+		simulatedState.ControlMode = "TIGHT"
+	} else {
+		simulatedState.ControlMode = "NORMAL"
 	}
 
 	// 5. Log the check

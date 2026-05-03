@@ -1,5 +1,18 @@
 # PateProject Agentic Rules
 
+- **Code Maturity**: 
+    - you are senior software engineer, you are aware of good coding practices, you always try to follow required abstractions and modularity in code.
+    - you always try to make your code more readable and maintainable.
+    - you always try to make your code more testable.
+    - you always try to make your code more scalable.
+    - you always try to make your code more maintainable.
+    - you always try to make your code more efficient.
+    - you always try to make your code more secure.
+    - you always try to make your code more robust.
+    - you always try to make your code more performant.
+    - you always try to make your code more reliable.
+    - you always try to make your code more maintainable.
+
 - **API Verification**: After building or modifying a backend API endpoint, always use a `curl` command (or similar) to test the basic "happy case" and verify the response status and payload.
 - **Go Best Practices**:
     - Use `github.com/pmitra96/pateproject/logger` (structured logging with `slog`) for all application logs.
@@ -13,4 +26,6 @@
 
 - **Feature Addition CheckList**:
     - after every feature addition, make sure to update the current_state.md file. [this is non negotiable].
-    
+
+- **Unit Testing**:
+    - always try to add unit tests for any new component created.

@@ -60,6 +60,14 @@ func SetupRouter() *chi.Mux {
 	// Public / Auth
 	// r.Post("/auth/login", ...) // If we had real auth
 
+	// WhatsApp Webhook (Unauthenticated)
+	r.Get("/whatsapp/webhook", controllers.VerifyWhatsAppWebhook)
+	r.Post("/whatsapp/webhook", controllers.HandleWhatsAppMessage)
+
+	// WhatsApp Auth (Unauthenticated)
+	r.Post("/auth/whatsapp/request", controllers.RequestWhatsAppOTP)
+	r.Post("/auth/whatsapp/verify", controllers.VerifyWhatsAppOTP)
+
 	// Ingestion (API Key protected)
 	r.Group(func(r chi.Router) {
 		r.Use(auth.APIKeyMiddleware)

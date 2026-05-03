@@ -55,8 +55,6 @@ func LogMeal(w http.ResponseWriter, r *http.Request) {
 	totalProtein = req.Protein
 	totalFat = req.Fat
 	totalCarbs = req.Carbs
-	totalFat = req.Fat
-	totalCarbs = req.Carbs
 
 	// Parse each ingredient and reduce pantry quantity
 	// Ingredients are in format like "100g Paneer", "2 Eggs", "1 cup Rice"

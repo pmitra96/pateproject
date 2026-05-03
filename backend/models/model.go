@@ -149,6 +149,7 @@ type MealLog struct {
 	ID                 uint           `gorm:"primaryKey" json:"id"`
 	UserID             uint           `gorm:"not null;index" json:"user_id"`
 	Name               string         `gorm:"size:255;not null" json:"name"`
+	MealType           string         `gorm:"size:50" json:"meal_type"` // e.g. Breakfast, Lunch, Dinner, Snack
 	Calories           float64        `gorm:"default:0" json:"calories"`
 	Protein            float64        `gorm:"default:0" json:"protein"`
 	Carbs              float64        `gorm:"default:0" json:"carbs"`
@@ -251,4 +252,43 @@ type ControlModeTransition struct {
 	TriggerMealID                 *uint     `json:"trigger_meal_id"`
 	RemainingCaloriesAtTransition float64   `json:"remaining_calories_at_transition"`
 	CreatedAt                     time.Time `json:"created_at"`
+}
+
+// OTP stores one-time passwords for WhatsApp login
+type OTP struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Phone     string    `gorm:"not null;index" json:"phone"`
+	Code      string    `gorm:"not null" json:"code"`
+	ExpiresAt time.Time `gorm:"not null" json:"expires_at"`
+	CreatedAt time.Time `json:"created_at"`
+}
+ 
+// LLMUsageLog tracks token usage for monitoring and billing
+type LLMUsageLog struct {
+	ID               uint      `gorm:"primaryKey" json:"id"`
+	UserID           uint      `gorm:"not null;index" json:"user_id"`
+	Model            string    `json:"model"`
+	PromptTokens     int       `json:"prompt_tokens"`
+	CompletionTokens int       `json:"completion_tokens"`
+	TotalTokens      int       `json:"total_tokens"`
+	Feature          string    `json:"feature"` // e.g., "whatsapp", "suggestion", "nutrition_extraction"
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+// Recipe stores extracted recipes for a user.
+type Recipe struct {
+	ID            uint           `gorm:"primaryKey" json:"id"`
+	UserID        uint           `gorm:"not null;index" json:"user_id"`
+	Name          string         `gorm:"size:255;not null" json:"name"`
+	Description   string         `gorm:"type:text" json:"description"`
+	Ingredients   string         `gorm:"type:text" json:"ingredients"`  // JSON string
+	Instructions  string         `gorm:"type:text" json:"instructions"` // JSON string
+	TotalCalories float64        `gorm:"default:0" json:"total_calories"`
+	TotalProtein  float64        `gorm:"default:0" json:"total_protein"`
+	TotalFat      float64        `gorm:"default:0" json:"total_fat"`
+	TotalCarbs    float64        `gorm:"default:0" json:"total_carbs"`
+	SourceURL     string         `gorm:"size:1024" json:"source_url"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
 }

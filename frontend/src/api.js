@@ -230,6 +230,42 @@ export const saveConversation = async (messages) => {
   return res.json();
 };
 
+// ==========================================
+// WHATSAPP AUTHENTICATION
+// ==========================================
+
+export const requestWhatsAppOTP = async (phone) => {
+  const response = await fetch(`${API_BASE}/auth/whatsapp/request`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone })
+  });
+  let data;
+  try {
+    data = await response.json();
+  } catch (e) {
+    throw new Error('Server error: failed to parse response');
+  }
+  if (!response.ok) throw new Error(data?.message || 'Failed to request OTP');
+  return data;
+};
+
+export const verifyWhatsAppOTP = async (phone, code) => {
+  const response = await fetch(`${API_BASE}/auth/whatsapp/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone, code })
+  });
+  let data;
+  try {
+    data = await response.json();
+  } catch (e) {
+    throw new Error('Server error: failed to parse response');
+  }
+  if (!response.ok) throw new Error(data?.message || 'Failed to verify OTP');
+  return data;
+};
+
 export const fetchConversations = async () => {
   const res = await fetch(`${API_BASE}/conversations`, {
     headers: getAuthHeader()
