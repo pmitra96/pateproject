@@ -14,13 +14,29 @@ var (
 // Init initializes the global structured logger
 func Init() {
 	once.Do(func() {
-		opts := &slog.HandlerOptions{
-			Level: slog.LevelDebug, // Log everything for now
+		env := os.Getenv("ENV")
+		if env == "" {
+			env = "development" // Default
 		}
-		// Use TextHandler for human readability in terminal/logs
-		handler := slog.NewTextHandler(os.Stdout, opts)
+
+		opts := &slog.HandlerOptions{
+			Level: slog.LevelDebug, // Keep DEBUG enabled for both for now
+		}
+
+		var handler slog.Handler
+		if env == "production" {
+			handler = slog.NewJSONHandler(os.Stdout, opts)
+		} else {
+			handler = slog.NewTextHandler(os.Stdout, opts)
+		}
+
 		logger = slog.New(handler)
 		slog.SetDefault(logger)
+		
+		Info("Logger initialized", "env", env, "format", func() string {
+			if env == "production" { return "json" }
+			return "text"
+		}())
 	})
 }
 

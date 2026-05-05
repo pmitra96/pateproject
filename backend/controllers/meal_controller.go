@@ -11,6 +11,7 @@ import (
 	"github.com/pmitra96/pateproject/database"
 	"github.com/pmitra96/pateproject/logger"
 	"github.com/pmitra96/pateproject/models"
+	"github.com/pmitra96/pateproject/services"
 )
 
 type LogMealRequest struct {
@@ -91,7 +92,7 @@ func LogMeal(w http.ResponseWriter, r *http.Request) {
 	ingredientsJSON, _ := json.Marshal(req.Ingredients)
 
 	// Determine pre-log control mode
-	preState, _ := ComputeRemainingDayState(userID, time.Now())
+	preState, _ := services.ComputeRemainingDayState(userID, time.Now())
 	controlModeAtLog := "NORMAL"
 	if preState != nil {
 		controlModeAtLog = preState.ControlMode
@@ -117,7 +118,7 @@ func LogMeal(w http.ResponseWriter, r *http.Request) {
 	logger.Info("Meal logged to history", "meal_log_id", mealLog.ID, "calories", totalCalories, "protein", totalProtein)
 
 	// Compute post-log state
-	newState, _ := ComputeRemainingDayState(userID, time.Now())
+	newState, _ := services.ComputeRemainingDayState(userID, time.Now())
 
 	resp := struct {
 		Status    string   `json:"status"`
@@ -364,7 +365,7 @@ func DeleteMealLog(w http.ResponseWriter, r *http.Request) {
 	database.DB.Delete(&mealLog)
 
 	// Trigger re-computation of state (to potentially exit TIGHT/DAMAGE_CONTROL)
-	ComputeRemainingDayState(userID, time.Now())
+	services.ComputeRemainingDayState(userID, time.Now())
 
 	logger.Info("Meal log deleted and pantry restored", "meal_log_id", mealLogID, "restored_items", len(restoredItems))
 

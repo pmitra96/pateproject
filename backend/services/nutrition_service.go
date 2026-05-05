@@ -363,7 +363,7 @@ func (s *NutritionService) EstimateNutritionFromQuery(userID uint, query string)
 
 	// 1. Search Global DB for match
 	var item models.Item
-	err := database.DB.Where("name ILIKE ?", query).Or("product_name ILIKE ?", query).Order("nutrition_verified DESC").First(&item).Error
+	err := database.DB.Where("name LIKE ?", query).Or("product_name LIKE ?", query).Order("nutrition_verified DESC").First(&item).Error
 	if err == nil {
 		// Found it! use its macros
 		// Check if it has non-zero macros

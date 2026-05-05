@@ -12,6 +12,7 @@ import (
 	"github.com/pmitra96/pateproject/config"
 	"github.com/pmitra96/pateproject/database"
 	"github.com/pmitra96/pateproject/models"
+	"github.com/pmitra96/pateproject/services/whatsapp"
 )
 
 type OTPRequest struct {
@@ -54,7 +55,7 @@ func RequestWhatsAppOTP(w http.ResponseWriter, r *http.Request) {
 
 	// Send via WhatsApp
 	msg := fmt.Sprintf("Your PateProject login code is: *%s*\n\nThis code expires in 10 minutes.", code)
-	err := SendWhatsAppMessage(req.Phone, msg)
+	err := whatsapp.NewClient().SendTextMessage(req.Phone, msg)
 	if err != nil {
 		fmt.Printf("Failed to send OTP to %s: %v\n", req.Phone, err)
 		w.Header().Set("Content-Type", "application/json")
@@ -101,7 +102,7 @@ func VerifyWhatsAppOTP(w http.ResponseWriter, r *http.Request) {
 	database.DB.Delete(&otp)
 
 	// Get or Create User
-	user, err := GetOrCreateWhatsAppUser(req.Phone)
+	user, err := whatsapp.GetOrCreateWhatsAppUser(req.Phone)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)

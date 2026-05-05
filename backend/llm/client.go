@@ -88,9 +88,25 @@ type Client struct {
 	provider Provider
 }
 
-func NewClient() *Client {
+var NewClient = func() *Client {
 	return &Client{
 		provider: NewProvider(),
+	}
+}
+
+// NewClientWithProvider creates a client with a specific provider (useful for tests)
+func NewClientWithProvider(p Provider) *Client {
+	return &Client{
+		provider: p,
+	}
+}
+
+var globalMockProvider Provider
+
+func SetMockProvider(p Provider) {
+	globalMockProvider = p
+	NewClient = func() *Client {
+		return &Client{provider: globalMockProvider}
 	}
 }
 
@@ -382,6 +398,22 @@ func (c *Client) ProcessWhatsAppConversation(userMessage string, imageBase64 str
 				},
 			},
 		},
+		{
+			Type: "function",
+			Function: FunctionDef{
+				Name:        "update_user_profile",
+				Description: "Update the user's personal profile (height, weight, age, gender). Call this when the user provides these details.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"height": map[string]any{"type": "number", "description": "Height in cm (e.g. 175)."},
+						"weight": map[string]any{"type": "number", "description": "Weight in kg (e.g. 70.5)."},
+						"age":    map[string]any{"type": "integer", "description": "Age in years."},
+						"gender": map[string]any{"type": "string", "enum": []string{"male", "female", "other"}},
+					},
+				},
+			},
+		},
 	}
 
 	systemPrompt := Message{
@@ -401,6 +433,9 @@ For receipts, focus on the name and the total quantity (e.g., "500g", "2 pieces"
 
 MEAL CORRECTIONS:
 If the user corrects a specific item (e.g. 'I actually had 6 eggs', 'remove the espresso'), use modify_logged_meal with action='update', 'add', or 'delete', target_dish_name='Egg White Omelette', new_ingredients='6 eggs'. Do NOT use log_meals again for corrections.
+
+PROFILE COLLECTION:
+If the user asks for a weight-loss goal or a goal with a timeline (e.g. 'lose 5kg in 75 days') and their profile data (Height, Weight, Age, Gender) is missing from the USER CONTEXT, ask for the missing details before calculating the calorie target. Once provided, use update_user_profile to save them.
 
 RESPONSE STRUCTURE:
 1. Decision or State
@@ -803,7 +838,7 @@ Set "confidence" (1-10) based on how well you followed the quality guidelines.`,
 	fmt.Println("\n========== LLM PROMPT ==========")
 	fmt.Println("SYSTEM:", messages[0].Content)
 	fmt.Println("\nUSER:", messages[1].Content)
-	fmt.Println("================================\n")
+	fmt.Println("================================")
 
 	// Step 1: Generate with self-evaluation
 	initialResponse, usage, err := c.Chat(messages)

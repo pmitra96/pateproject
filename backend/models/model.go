@@ -180,6 +180,10 @@ type Conversation struct {
 type UserPreferences struct {
 	ID                uint           `gorm:"primaryKey" json:"id"`
 	UserID            uint           `gorm:"not null;uniqueIndex" json:"user_id"`
+	Height            float64        `json:"height"` // in cm
+	Weight            float64        `json:"weight"` // in kg
+	Age               int            `json:"age"`
+	Gender            string         `gorm:"size:20" json:"gender"` // male, female, other
 	Country           string         `gorm:"size:100" json:"country"`
 	State             string         `gorm:"size:100" json:"state"`
 	City              string         `gorm:"size:100" json:"city"`

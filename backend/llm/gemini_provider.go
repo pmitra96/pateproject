@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/pmitra96/pateproject/config"
@@ -174,6 +175,7 @@ func (p *GeminiProvider) callGeminiWithTools(geminiReq GeminiRequest) (*Message,
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", p.model, p.apiKey)
 	
 	jsonData, _ := json.Marshal(geminiReq)
+	fmt.Fprintf(os.Stderr, "DEBUG: Gemini Request: %s\n", string(jsonData))
 	resp, err := sharedHTTPClient.Post(url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, Usage{}, err
@@ -192,23 +194,30 @@ func (p *GeminiProvider) callGeminiWithTools(geminiReq GeminiRequest) (*Message,
 		return nil, Usage{}, fmt.Errorf("empty response from Gemini")
 	}
 
-	part := geminiResp.Candidates[0].Content.Parts[0]
 	msg := &Message{Role: "assistant"}
+	var contentBuilder strings.Builder
+	var toolCalls []ToolCall
 
-	if part.FunctionCall != nil {
-		argsBytes, _ := json.Marshal(part.FunctionCall.Args)
-		msg.ToolCalls = []ToolCall{
-			{
+	for _, part := range geminiResp.Candidates[0].Content.Parts {
+		if part.FunctionCall != nil {
+			argsBytes, _ := json.Marshal(part.FunctionCall.Args)
+			toolCalls = append(toolCalls, ToolCall{
 				Type: "function",
 				Function: ToolCallFunction{
 					Name:      part.FunctionCall.Name,
 					Arguments: string(argsBytes),
 				},
-			},
+			})
+		} else if part.Text != "" {
+			if contentBuilder.Len() > 0 {
+				contentBuilder.WriteString("\n")
+			}
+			contentBuilder.WriteString(part.Text)
 		}
-	} else {
-		msg.Content = part.Text
 	}
+
+	msg.Content = contentBuilder.String()
+	msg.ToolCalls = toolCalls
 
 	return msg, Usage{
 		PromptTokens:     geminiResp.UsageMetadata.PromptTokenCount,

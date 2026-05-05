@@ -12,13 +12,11 @@ import (
 )
 
 func main() {
+	// Load .env
+	_ = godotenv.Load()
+
 	// Initialize Structured Logger
 	logger.Init()
-
-	// Load .env
-	if err := godotenv.Load(); err != nil {
-		logger.Warn("No .env file found, using system env vars")
-	}
 
 	// Initialize DB
 	logger.Info("Checking Configuration...")

@@ -14,131 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// ComputeRemainingDayState calculates the remaining nutritional budget for a user
-func ComputeRemainingDayState(userID uint, date time.Time) (*models.RemainingDayState, error) {
-	var goal models.Goal
-	if err := database.DB.Where("user_id = ? AND is_active = ?", userID, true).Order("updated_at desc").First(&goal).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, nil // No active goal, so no state to compute
-		}
-		return nil, err
-	}
-
-	// 2. Get goal macro profile
-	var profile models.GoalMacroProfile
-	if err := database.DB.Where("goal_id = ?", goal.ID).First(&profile).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, nil // Goal exists but no targets set
-		}
-		return nil, err
-	}
-
-	// 3. Fetch all meals logged today
-	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-	endOfDay := startOfDay.Add(24 * time.Hour)
-
-	var meals []models.MealLog
-	if err := database.DB.Where("user_id = ? AND logged_at >= ? AND logged_at < ?", userID, startOfDay, endOfDay).Find(&meals).Error; err != nil {
-		return nil, err
-	}
-
-	// 4. Sum consumed macros
-	var consumedCalories, consumedProtein, consumedFat, consumedCarbs float64
-	for _, meal := range meals {
-		consumedCalories += meal.Calories
-		consumedProtein += meal.Protein
-		consumedFat += meal.Fat
-		consumedCarbs += meal.Carbs
-	}
-
-	// 5. Calculate remaining
-	remainingCalories := float64(profile.DailyCalorieTarget) - consumedCalories
-	remainingProtein := profile.DailyProteinTarget - consumedProtein
-	remainingFat := profile.DailyFatTarget - consumedFat
-	remainingCarbs := profile.DailyCarbsTarget - consumedCarbs
-
-	// 6. Determine Control Mode
-	controlMode := "NORMAL"
-	damageFloor := float64(profile.DamageControlFloorCalories)
-	calTarget := float64(profile.DailyCalorieTarget)
-
-	// Logic:
-	// If remaining < damage_floor OR < 0 (technically covered by damage_floor if floor > 0) -> DAMAGE_CONTROL
-	// If remaining < 20% of target -> TIGHT
-	// Else -> NORMAL
-
-	if remainingCalories < damageFloor {
-		controlMode = "DAMAGE_CONTROL"
-	} else if remainingCalories < (calTarget * 0.20) {
-		controlMode = "TIGHT"
-	}
-
-	// Check sticky DAMAGE_CONTROL: once in damage control, stay there until midnight?
-	// The prompt said "STICKY until midnight".
-	// Implementation: Check existing state for the day. If it was DAMAGE_CONTROL, keep it.
-	var existingState models.RemainingDayState
-	if err := database.DB.Where("user_id = ? AND date = ?", userID, startOfDay).First(&existingState).Error; err == nil {
-		// Also check for audit log if mode changed (new != old)
-		if existingState.ControlMode != controlMode {
-			// Log transition
-			transition := models.ControlModeTransition{
-				UserID:                        userID,
-				Date:                          startOfDay,
-				FromMode:                      existingState.ControlMode,
-				ToMode:                        controlMode,
-				RemainingCaloriesAtTransition: remainingCalories,
-				CreatedAt:                     time.Now(),
-			}
-			database.DB.Create(&transition)
-		}
-	}
-
-	// 7. Calculate meals remaining
-	// Simple logic based on time of day
-	now := time.Now()
-	mealsRemaining := 1
-	if now.Hour() < 11 {
-		mealsRemaining = 3
-	} else if now.Hour() < 16 {
-		mealsRemaining = 2
-	} // else after 4pm -> 1
-
-	// Save/Update State
-	state := models.RemainingDayState{
-		UserID:            userID,
-		Date:              startOfDay,
-		RemainingCalories: remainingCalories,
-		RemainingProtein:  remainingProtein,
-		RemainingFat:      remainingFat,
-		RemainingCarbs:    remainingCarbs,
-		TargetCalories:    float64(profile.DailyCalorieTarget),
-		TargetProtein:     profile.DailyProteinTarget,
-		TargetFat:         profile.DailyFatTarget,
-		TargetCarbs:       profile.DailyCarbsTarget,
-		MealsRemaining:    mealsRemaining,
-		ControlMode:       controlMode,
-		LastComputedAt:    time.Now(),
-	}
-
-	// Upsert State
-	var existing models.RemainingDayState
-	err := database.DB.Where("user_id = ? AND date = ?", userID, startOfDay).First(&existing).Error
-	if err == gorm.ErrRecordNotFound {
-		if err := database.DB.Create(&state).Error; err != nil {
-			return nil, err
-		}
-	} else if err == nil {
-		state.ID = existing.ID
-		state.CreatedAt = existing.CreatedAt // Preserve creation time
-		if err := database.DB.Save(&state).Error; err != nil {
-			return nil, err
-		}
-	} else {
-		return nil, err
-	}
-
-	return &state, nil
-}
+// (Function moved to services/remaining_day_service.go)
 
 // HTTP Handlers
 
@@ -151,7 +27,7 @@ func GetRemainingDayState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Compute fresh state
-	state, err := ComputeRemainingDayState(userID, time.Now())
+	state, err := services.ComputeRemainingDayState(userID, time.Now())
 	if err != nil {
 		logger.Error("Failed to compute state", "error", err)
 		http.Error(w, "Failed to compute state", http.StatusInternalServerError)
@@ -242,7 +118,7 @@ func SetGoalMacroTargets(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Trigger re-computation
-	ComputeRemainingDayState(userID, time.Now())
+	services.ComputeRemainingDayState(userID, time.Now())
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "success"})
@@ -260,7 +136,7 @@ func ValidateMeal(w http.ResponseWriter, r *http.Request) {
 	calories, _ := strconv.ParseFloat(r.URL.Query().Get("calories"), 64)
 	// ... parse others ...
 
-	state, _ := ComputeRemainingDayState(userID, time.Now())
+	state, _ := services.ComputeRemainingDayState(userID, time.Now())
 	if state == nil {
 		// No restrictions if no state
 		json.NewEncoder(w).Encode(map[string]interface{}{"allowed": true})
@@ -318,7 +194,7 @@ func CheckFoodPermissionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Get current state
-	state, err := ComputeRemainingDayState(userID, time.Now())
+	state, err := services.ComputeRemainingDayState(userID, time.Now())
 	if err != nil {
 		logger.Error("Failed to compute state for permission check", "error", err)
 		http.Error(w, "Failed to compute state", http.StatusInternalServerError)
