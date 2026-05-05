@@ -57,6 +57,8 @@ func InitDB() {
 		&models.OTP{},
 		&models.LLMUsageLog{},
 		&models.IngredientMapping{},
+		&models.ProcessedWebhook{},
+		&models.DebugLog{},
 	)
 	if err != nil {
 		log.Fatal("Failed to migrate database: ", err)

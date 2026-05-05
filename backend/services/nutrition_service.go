@@ -14,6 +14,12 @@ import (
 	"github.com/pmitra96/pateproject/models"
 )
 
+var (
+	sharedHTTPClient = &http.Client{
+		Timeout: 45 * time.Second,
+	}
+)
+
 type NutritionService struct {
 	llmClient *llm.Client
 }
@@ -61,8 +67,7 @@ func (s *NutritionService) fetchFromPythonScraper(item *models.Item) error {
 	url := fmt.Sprintf("%s/api/v1/products/search?query=%s", baseURL, strings.ReplaceAll(query, " ", "+"))
 	logger.Info("Searching Python Scraper", "query", query, "url", url)
 
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := sharedHTTPClient.Get(url)
 	if err != nil {
 		return fmt.Errorf("scraper request failed: %v", err)
 	}
@@ -182,8 +187,7 @@ func (s *NutritionService) fetchFromOpenFoodFacts(item *models.Item) error {
 		logger.Info("Searching Open Food Facts", "query", query)
 		url := fmt.Sprintf("https://world.openfoodfacts.org/cgi/search.pl?search_terms=%s&search_simple=1&action=process&json=1", strings.ReplaceAll(query, " ", "+"))
 
-		client := &http.Client{Timeout: 2 * time.Second}
-		resp, err := client.Get(url)
+		resp, err := sharedHTTPClient.Get(url)
 		if err != nil {
 			logger.Warn("Open Food Facts search failed or timed out", "query", query, "error", err)
 			continue
@@ -409,9 +413,11 @@ Return ONLY a JSON object:
 	}
 
 	cleanResp := strings.TrimSpace(resp)
-	if strings.HasPrefix(cleanResp, "```json") {
-		cleanResp = strings.TrimPrefix(cleanResp, "```json")
-		cleanResp = strings.TrimSuffix(cleanResp, "```")
+	// Find the first '{' and last '}' to extract JSON from possible chatty responses
+	start := strings.Index(cleanResp, "{")
+	end := strings.LastIndex(cleanResp, "}")
+	if start != -1 && end != -1 && end > start {
+		cleanResp = cleanResp[start : end+1]
 	}
 
 	var data struct {
@@ -423,7 +429,8 @@ Return ONLY a JSON object:
 	}
 
 	if err := json.Unmarshal([]byte(cleanResp), &data); err != nil {
-		return nil, err
+		logger.Error("Failed to parse nutrition estimate JSON", "error", err, "response", resp)
+		return nil, fmt.Errorf("failed to parse nutrition data")
 	}
 
 	return &FoodEstimate{

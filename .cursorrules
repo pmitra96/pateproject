@@ -1,0 +1,6 @@
+# Token Efficiency Rules
+- **Conciseness**: Prioritize brief, direct answers. Avoid conversational filler or repeating the user's request.
+- **Surgical Research**: When using `view_file`, always prefer specific line ranges (e.g., 10-50 lines) over full-file reads unless absolutely necessary.
+- **Efficient Edits**: Use `replace_file_content` for small, targeted changes instead of rewriting large blocks.
+- **Minimal Metadata**: In planning and walkthroughs, focus on actionable technical details and omit non-essential background.
+- **One-Shot Execution**: Group multiple related commands or file edits into single tool calls where possible to reduce round-trips.

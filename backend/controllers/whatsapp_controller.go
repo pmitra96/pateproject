@@ -19,6 +19,12 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+var (
+	sharedHTTPClient = &http.Client{
+		Timeout: 45 * time.Second,
+	}
+)
+
 // VerifyWhatsAppWebhook handles the GET request from Meta to verify the webhook URL.
 func VerifyWhatsAppWebhook(w http.ResponseWriter, r *http.Request) {
 	verifyToken := config.GetEnv("WHATSAPP_VERIFY_TOKEN", "")
@@ -104,6 +110,20 @@ func processWhatsAppPayload(payload map[string]interface{}) {
 	}
 
 	fromPhone, _ := message["from"].(string)
+	msgID, _ := message["id"].(string)
+
+	if msgID != "" {
+		// Deduplication check: try to insert this msgID. 
+		// If it violates the unique constraint, it's a retry and we're already processing it.
+		if err := database.DB.Create(&models.ProcessedWebhook{MessageID: msgID}).Error; err != nil {
+			fmt.Printf("[DEDUPE] Ignoring duplicate webhook for message_id: %s\n", msgID)
+			return
+		}
+		database.DB.Create(&models.DebugLog{
+			Level:   "INFO",
+			Message: fmt.Sprintf("Milestone: Message Received (%s)", msgID),
+		})
+	}
 	
 	var textBody string
 	msgType, _ := message["type"].(string)
@@ -162,13 +182,21 @@ func processWhatsAppPayload(payload map[string]interface{}) {
 	// 1. Auto-provision User
 	user, err := GetOrCreateWhatsAppUser(fromPhone)
 	if err != nil {
-		fmt.Printf("Error provisioning user: %v\n", err)
+		msg := fmt.Sprintf("Error provisioning user: %v", err)
+		fmt.Println(msg)
+		database.DB.Create(&models.DebugLog{Level: "ERROR", Message: msg})
 		SendWhatsAppMessage(fromPhone, "Sorry, there was an internal error setting up your account.")
 		return
 	}
+	database.DB.Create(&models.DebugLog{
+		Level:   "INFO",
+		Message: fmt.Sprintf("Milestone: User Identified (%d)", user.ID),
+	})
 
 	// 2. Classify intent and act
+	database.DB.Create(&models.DebugLog{Level: "INFO", Message: "Milestone: Starting Intent Analysis"})
 	responseMsg := handleWhatsAppIntent(user, textBody, "")
+	database.DB.Create(&models.DebugLog{Level: "INFO", Message: "Milestone: Analysis Finished"})
 
 	// 3. Send Reply
 	SendWhatsAppMessage(fromPhone, responseMsg)
@@ -185,8 +213,7 @@ func downloadWhatsAppMedia(mediaID string) ([]byte, error) {
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := sharedHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +232,7 @@ func downloadWhatsAppMedia(mediaID string) ([]byte, error) {
 	// 2. Download the actual media
 	req, _ = http.NewRequest("GET", meta.URL, nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	resp, err = client.Do(req)
+	resp, err = sharedHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -306,31 +333,43 @@ func handleWhatsAppIntent(user *models.User, text string, imageBase64 string) st
 		userContext += recentHistory
 	}
 
-	// 1. Process via LLM Tool Calling within a transaction to avoid history races
+	// 1. Fetch History (No lock during LLM call)
+	var conv models.Conversation
+	database.DB.Where("user_id = ?", user.ID).First(&conv)
+	var history []llm.Message
+	if conv.Messages != "" {
+		json.Unmarshal([]byte(conv.Messages), &history)
+	}
+
+	// 2. Process via LLM (Slow HTTP call - do NOT wrap in DB transaction)
 	var assistantMsg *llm.Message
 	var usage llm.Usage
 	var err error
-	
+
+	assistantMsg, usage, err = llmClient.ProcessWhatsAppConversation(text, imageBase64, history, userContext)
+	if err != nil {
+		fmt.Printf("LLM Processing Error for User %d: %v\n", user.ID, err)
+		// Persistent Log for Debugging
+		database.DB.Create(&models.DebugLog{
+			Level:   "ERROR",
+			Message: fmt.Sprintf("LLM Error for User %d: %v", user.ID, err),
+		})
+		return fmt.Sprintf("I'm having trouble thinking right now. Error: %v", err)
+	}
+
+	// 3. Update History safely in a fast transaction
 	err = database.DB.Transaction(func(tx *gorm.DB) error {
-		var conv models.Conversation
-		// Use Clause FOR UPDATE to lock the conversation row for this user
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", user.ID).First(&conv).Error; err != nil && err != gorm.ErrRecordNotFound {
+		var latestConv models.Conversation
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", user.ID).First(&latestConv).Error; err != nil && err != gorm.ErrRecordNotFound {
 			return err
 		}
 
-		var history []llm.Message
-		if conv.Messages != "" {
-			json.Unmarshal([]byte(conv.Messages), &history)
+		var latestHistory []llm.Message
+		if latestConv.Messages != "" {
+			json.Unmarshal([]byte(latestConv.Messages), &latestHistory)
 		}
 
-		// Process via LLM
-		assistantMsg, usage, err = llmClient.ProcessWhatsAppConversation(text, imageBase64, history, userContext)
-		if err != nil {
-			return err
-		}
-
-		// Update History
-		updatedHistory := append(history, llm.Message{Role: "user", Content: text})
+		updatedHistory := append(latestHistory, llm.Message{Role: "user", Content: text})
 		if len(assistantMsg.ToolCalls) == 0 && assistantMsg.Content != "" {
 			updatedHistory = append(updatedHistory, llm.Message{Role: "assistant", Content: assistantMsg.Content})
 		} else if len(assistantMsg.ToolCalls) > 0 {
@@ -342,16 +381,16 @@ func handleWhatsAppIntent(user *models.User, text string, imageBase64 string) st
 		}
 		historyJSON, _ := json.Marshal(updatedHistory)
 		
-		if conv.ID == 0 {
+		if latestConv.ID == 0 {
 			return tx.Create(&models.Conversation{UserID: user.ID, Messages: string(historyJSON)}).Error
 		} else {
-			return tx.Model(&conv).Update("messages", string(historyJSON)).Error
+			return tx.Model(&latestConv).Update("messages", string(historyJSON)).Error
 		}
 	})
 
 	if err != nil {
-		fmt.Println("Processing Error:", err)
-		return "I'm having trouble thinking right now. Please try again later."
+		fmt.Printf("DB History Update Error for User %d: %v\n", user.ID, err)
+		// We still return the assistant response or execute the tool, as the main work succeeded
 	}
 
 	// 1.1 Log Usage (Outside transaction)
@@ -367,20 +406,37 @@ func handleWhatsAppIntent(user *models.User, text string, imageBase64 string) st
 
 	// 2. If it's a conversational reply (no tools called), return the text
 	if len(assistantMsg.ToolCalls) == 0 {
-		content, _ := assistantMsg.Content.(string)
+		var content string
+		switch v := assistantMsg.Content.(type) {
+		case string:
+			content = v
+		case []llm.ContentPart:
+			for _, part := range v {
+				if part.Type == "text" {
+					content += part.Text
+				}
+			}
+		}
+		
+		if content == "" {
+			return "I heard you, but I'm not sure how to respond to that. Could you try rephrasing?"
+		}
 		return content
 	}
 
 	// 3. Handle Tool Calls
 	var toolResponses []string
 	for _, toolCall := range assistantMsg.ToolCalls {
-		toolResponses = append(toolResponses, handleWhatsAppToolCall(user, toolCall))
+		resp := handleWhatsAppToolCall(user, toolCall)
+		if resp != "" {
+			toolResponses = append(toolResponses, resp)
+		}
 	}
 	
 	if len(toolResponses) > 0 {
 		return strings.Join(toolResponses, "\n\n")
 	}
-	return "I'm not sure how to respond to that."
+	return "I've processed your request, but I don't have a specific update for you."
 }
 
 func handleWhatsAppToolCall(user *models.User, toolCall llm.ToolCall) string {
@@ -405,6 +461,7 @@ func handleWhatsAppToolCall(user *models.User, toolCall llm.ToolCall) string {
 
 			estimated, err := ns.EstimateNutritionFromQuery(user.ID, ingredients)
 			if err != nil || estimated == nil {
+				summary = append(summary, fmt.Sprintf("⚠️ *Could not estimate %s*: I had trouble calculating the calories for this item. Could you try rephrasing?", dishName))
 				continue
 			}
 
@@ -480,44 +537,109 @@ func handleWhatsAppToolCall(user *models.User, toolCall llm.ToolCall) string {
 		}
 		return fmt.Sprintf("🎯 *Goal Updated!* Your daily target is now %d calories. I've updated your budget accordingly. Let's go!", calories)
 
-	case "update_meal":
+	case "modify_logged_meal":
 		var args map[string]interface{}
 		json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
-		newIngredients, _ := args["full_new_description"].(string)
 		mealType, _ := args["meal_type"].(string)
+		action, _ := args["action"].(string)
+		targetDishName, _ := args["target_dish_name"].(string)
+		newIngredients, _ := args["new_ingredients"].(string)
 
-		var meal models.MealLog
-		query := database.DB.Where("user_id = ?", user.ID)
-		if mealType != "" {
-			query = query.Where("meal_type = ?", mealType)
-		}
-		if err := query.Order("logged_at desc").First(&meal).Error; err != nil {
-			return fmt.Sprintf("I couldn't find a recent %s to update. Should I log this as a new meal instead?", mealType)
+		if mealType == "" || action == "" {
+			return "I couldn't understand which meal or action you wanted. Could you rephrase?"
 		}
 
-		// Re-estimate based on full new description
-		estimated, err := ns.EstimateNutritionFromQuery(user.ID, newIngredients)
-		if err != nil || estimated == nil {
-			return fmt.Sprintf("I tried to update your %s, but I'm having trouble recalculating the nutrition.", meal.Name)
+		today := time.Now().Truncate(24 * time.Hour)
+
+		switch action {
+		case "add":
+			if newIngredients == "" {
+				return "What should I add to the meal?"
+			}
+			estimated, err := ns.EstimateNutritionFromQuery(user.ID, newIngredients)
+			if err != nil || estimated == nil {
+				return "I had trouble estimating the nutrition for that new item."
+			}
+			
+			dishName := targetDishName
+			if dishName == "" {
+				dishName = newIngredients // Fallback if LLM didn't provide a good short name
+			}
+
+			mealLog := models.MealLog{
+				UserID:           user.ID,
+				Name:             dishName,
+				MealType:         mealType,
+				Ingredients:      newIngredients,
+				Calories:         estimated.Calories,
+				Protein:          estimated.Protein,
+				Carbs:            estimated.Carbs,
+				Fat:              estimated.Fat,
+				LoggedAt:         time.Now(),
+			}
+			database.DB.Create(&mealLog)
+			
+			newState, _ := ComputeRemainingDayState(user.ID, time.Now())
+			return fmt.Sprintf("✅ *Added %s to your %s!*\n\n*Remaining today:* %.0f kcal, %.1fg protein.", dishName, mealType, newState.RemainingCalories, newState.RemainingProtein)
+
+		case "delete":
+			if targetDishName == "" {
+				return "Which specific dish should I delete?"
+			}
+			// Find the dish by name for today's meal
+			var meal models.MealLog
+			if err := database.DB.Where("user_id = ? AND meal_type = ? AND DATE(logged_at) = DATE(?) AND name ILIKE ?", user.ID, mealType, today, "%"+targetDishName+"%").First(&meal).Error; err != nil {
+				return fmt.Sprintf("I couldn't find '%s' in today's %s to delete.", targetDishName, mealType)
+			}
+			
+			database.DB.Delete(&meal)
+			newState, _ := ComputeRemainingDayState(user.ID, time.Now())
+			return fmt.Sprintf("🗑️ *Removed %s from your %s.*\n\n*Remaining today:* %.0f kcal, %.1fg protein.", meal.Name, mealType, newState.RemainingCalories, newState.RemainingProtein)
+
+		case "update":
+			if targetDishName == "" || newIngredients == "" {
+				return "I need to know which dish to update and the new details."
+			}
+			// Find the dish by name for today's meal
+			var meal models.MealLog
+			if err := database.DB.Where("user_id = ? AND meal_type = ? AND DATE(logged_at) = DATE(?) AND name ILIKE ?", user.ID, mealType, today, "%"+targetDishName+"%").First(&meal).Error; err != nil {
+				return fmt.Sprintf("I couldn't find '%s' in today's %s to update.", targetDishName, mealType)
+			}
+
+			estimated, err := ns.EstimateNutritionFromQuery(user.ID, newIngredients)
+			if err != nil || estimated == nil {
+				return "I had trouble recalculating the nutrition for that update."
+			}
+
+			database.DB.Model(&meal).Updates(map[string]interface{}{
+				"ingredients": newIngredients,
+				"calories":    estimated.Calories,
+				"protein":     estimated.Protein,
+				"carbs":       estimated.Carbs,
+				"fat":         estimated.Fat,
+				"updated_at":  time.Now(),
+			})
+
+			newState, _ := ComputeRemainingDayState(user.ID, time.Now())
+			return fmt.Sprintf("✅ *Updated %s!*\nNow: %s (%.0f kcal)\n\n*Remaining today:* %.0f kcal, %.1fg protein.", meal.Name, newIngredients, estimated.Calories, newState.RemainingCalories, newState.RemainingProtein)
+		
+		default:
+			return "I'm not sure how to perform that action."
 		}
 
-		oldIngredients := meal.Ingredients
-		database.DB.Model(&meal).Updates(map[string]interface{}{
-			"ingredients": newIngredients,
-			"calories":    estimated.Calories,
-			"protein":     estimated.Protein,
-			"carbs":       estimated.Carbs,
-			"fat":         estimated.Fat,
-			"updated_at":  time.Now(),
-		})
-
+	case "clear_all_meals_today":
+		today := time.Now().Truncate(24 * time.Hour)
+		result := database.DB.Where("user_id = ? AND DATE(logged_at) = DATE(?)", user.ID, today).Delete(&models.MealLog{})
+		if result.Error != nil {
+			return "I had trouble clearing your meals. Please try again."
+		}
+		
+		if result.RowsAffected == 0 {
+			return "You haven't logged any meals today, so there's nothing to clear! 🥗"
+		}
+		
 		newState, _ := ComputeRemainingDayState(user.ID, time.Now())
-		resp := fmt.Sprintf("✅ *Updated your %s (%s)!*\nPrevious: %s\nNow: %s\n\nNew Total: %.0f kcal, %.1fg protein.",
-			meal.MealType, meal.Name, oldIngredients, newIngredients, estimated.Calories, estimated.Protein)
-		if newState != nil {
-			resp += fmt.Sprintf("\n\n*Remaining today:* %.0f kcal.", newState.RemainingCalories)
-		}
-		return resp
+		return fmt.Sprintf("🗑️ *Wiped the slate clean!* I've deleted all %d items you logged for today.\n\n*Remaining today:* %.0f kcal, %.1fg protein.", result.RowsAffected, newState.RemainingCalories, newState.RemainingProtein)
 
 	case "get_past_day_summary":
 		var args map[string]interface{}
@@ -910,18 +1032,27 @@ func SendWhatsAppMessage(to string, text string) error {
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := sharedHTTPClient.Do(req)
 	if err != nil {
-		fmt.Printf("Error sending WhatsApp message: %v\n", err)
+		msg := fmt.Sprintf("Error sending WhatsApp message to %s: %v", to, err)
+		fmt.Println(msg)
+		database.DB.Create(&models.DebugLog{
+			Level:   "ERROR",
+			Message: msg,
+		})
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
-		fmt.Printf("WhatsApp API Error: %s\n", string(respBody))
-		return fmt.Errorf("API error: %s", string(respBody))
+		msg := fmt.Sprintf("WhatsApp API Error for %s: (Status %d) %s", to, resp.StatusCode, string(respBody))
+		fmt.Println(msg)
+		database.DB.Create(&models.DebugLog{
+			Level:   "ERROR",
+			Message: msg,
+		})
+		return fmt.Errorf("whatsapp api error: %s", string(respBody))
 	}
 
 	return nil
@@ -964,8 +1095,7 @@ func SendWhatsAppInteractiveButtons(to string, text string, buttons []map[string
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := sharedHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}

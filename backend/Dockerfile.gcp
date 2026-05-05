@@ -3,9 +3,6 @@ FROM golang:1.24.1-alpine AS builder
 
 WORKDIR /app
 
-# Install build dependencies
-RUN apk add --no-cache gcc musl-dev
-
 # Copy go mod and sum files
 COPY go.mod go.sum ./
 RUN go mod download
@@ -13,8 +10,8 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application
-RUN CGO_ENABLED=1 GOOS=linux go build -o main ./cmd/server/main.go
+# Build the application with CGO disabled for fast, static builds
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./cmd/server/main.go
 
 # Final stage
 FROM alpine:latest

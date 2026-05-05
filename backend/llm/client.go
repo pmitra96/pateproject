@@ -1,15 +1,14 @@
 package llm
 
 import (
-	"bytes"
+
 	"encoding/json"
 	"fmt"
-	"io"
+
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/pmitra96/pateproject/config"
 )
 
 type ToolCallFunction struct {
@@ -77,128 +76,30 @@ type ChatResponse struct {
 	Usage   Usage    `json:"usage"`
 }
 
+var (
+	// Using a simple client with a generous timeout. 
+	// Standard transport is better for Cloud Run's internal proxying.
+	sharedHTTPClient = &http.Client{
+		Timeout: 90 * time.Second,
+	}
+)
+
 type Client struct {
-	apiKey  string
-	baseURL string
-	model   string
-	client  *http.Client
+	provider Provider
 }
 
 func NewClient() *Client {
 	return &Client{
-		apiKey:  config.GetEnv("LLM_API_KEY", ""),
-		baseURL: config.GetEnv("LLM_BASE_URL", "https://api.openai.com/v1"),
-		model:   config.GetEnv("LLM_MODEL", "gpt-4o-mini"),
-		client: &http.Client{
-			Timeout: 60 * time.Second,
-		},
+		provider: NewProvider(),
 	}
 }
 
 func (c *Client) Chat(messages []Message) (string, Usage, error) {
-	if c.apiKey == "" {
-		return "", Usage{}, fmt.Errorf("LLM_API_KEY not configured")
-	}
-
-	reqBody := ChatRequest{
-		Model:       c.model,
-		Messages:    messages,
-		MaxTokens:   1000,
-		Temperature: 0.7,
-	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", Usage{}, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequest("POST", c.baseURL+"/chat/completions", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", Usage{}, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return "", Usage{}, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", Usage{}, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", Usage{}, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
-	}
-
-	var chatResp ChatResponse
-	if err := json.Unmarshal(body, &chatResp); err != nil {
-		return "", Usage{}, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if len(chatResp.Choices) == 0 {
-		return "", Usage{}, fmt.Errorf("no response choices returned")
-	}
-
-	contentStr, _ := chatResp.Choices[0].Message.Content.(string)
-	return contentStr, chatResp.Usage, nil
+	return c.provider.Chat(messages)
 }
 
 func (c *Client) ChatWithTools(messages []Message, tools []Tool) (*Message, Usage, error) {
-	if c.apiKey == "" {
-		return nil, Usage{}, fmt.Errorf("LLM_API_KEY not configured")
-	}
-
-	reqBody := ChatRequest{
-		Model:       c.model,
-		Messages:    messages,
-		MaxTokens:   1000,
-		Temperature: 0.7,
-		Tools:       tools,
-	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, Usage{}, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequest("POST", c.baseURL+"/chat/completions", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, Usage{}, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, Usage{}, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, Usage{}, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, Usage{}, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
-	}
-
-	var chatResp ChatResponse
-	if err := json.Unmarshal(body, &chatResp); err != nil {
-		return nil, Usage{}, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if len(chatResp.Choices) == 0 {
-		return nil, Usage{}, fmt.Errorf("no response choices returned")
-	}
-
-	return &chatResp.Choices[0].Message, chatResp.Usage, nil
+	return c.provider.ChatWithTools(messages, tools)
 }
 
 // ProcessWhatsAppConversation handles a message and routes it using OpenAI tools with context
@@ -298,22 +199,31 @@ func (c *Client) ProcessWhatsAppConversation(userMessage string, imageBase64 str
 		{
 			Type: "function",
 			Function: FunctionDef{
-				Name:        "update_meal",
-				Description: "Update a previously logged meal (Breakfast, Lunch, Dinner, or Snack) with corrections or missing items. Use this specifically when the user says 'actually...' or 'I forgot to mention...' regarding a SPECIFIC meal category.",
+				Name:        "modify_logged_meal",
+				Description: "Update, delete, or add a specific dish to a previously logged meal for today. Use this for partial updates like 'actually, I had 6 eggs instead of 4', 'remove the espresso', or 'I forgot to add an apple to breakfast'.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"meal_type": map[string]any{
 							"type":        "string",
 							"enum":        []string{"Breakfast", "Lunch", "Dinner", "Snack"},
-							"description": "The type of meal to update. If unspecified, assume the most recent one.",
+							"description": "The type of meal to update.",
 						},
-						"full_new_description": map[string]any{
+						"action": map[string]any{
 							"type":        "string",
-							"description": "The complete, corrected list of all items for this meal.",
+							"enum":        []string{"add", "update", "delete"},
+							"description": "The action to perform on the specific dish.",
+						},
+						"target_dish_name": map[string]any{
+							"type":        "string",
+							"description": "The name of the existing dish to update or delete (e.g. 'Egg White Omelette'). Leave blank if action is 'add'.",
+						},
+						"new_ingredients": map[string]any{
+							"type":        "string",
+							"description": "The new description for calculating nutrition (e.g. '6 egg whites'). Required if action is 'add' or 'update'.",
 						},
 					},
-					"required": []string{"full_new_description", "meal_type"},
+					"required": []string{"meal_type", "action"},
 				},
 			},
 		},
@@ -331,6 +241,17 @@ func (c *Client) ProcessWhatsAppConversation(userMessage string, imageBase64 str
 						},
 					},
 					"required": []string{"date"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: FunctionDef{
+				Name:        "clear_all_meals_today",
+				Description: "Delete EVERY meal logged for today. Call this only when the user explicitly wants to reset their entire day's logging (e.g. 'clear my day', 'delete all meals').",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
 				},
 			},
 		},
@@ -477,6 +398,9 @@ CORE PRINCIPLES:
 GROCERY & IMAGE HANDLING:
 If the user message is a list of raw items or ingredients (likely from a grocery receipt or a photo of a shopping bag), use update_pantry. Do NOT log these as a meal unless the user explicitly says "I ate this".
 For receipts, focus on the name and the total quantity (e.g., "500g", "2 pieces").
+
+MEAL CORRECTIONS:
+If the user corrects a specific item (e.g. 'I actually had 6 eggs', 'remove the espresso'), use modify_logged_meal with action='update', 'add', or 'delete', target_dish_name='Egg White Omelette', new_ingredients='6 eggs'. Do NOT use log_meals again for corrections.
 
 RESPONSE STRUCTURE:
 1. Decision or State
@@ -1038,10 +962,6 @@ Return ONLY the summary, no other text.`, conversationText)
 }
 // AnalyzeMealImage sends an image to the AI to extract meal details
 func (c *Client) AnalyzeMealImage(imageBase64 string) (string, error) {
-	if c.apiKey == "" {
-		return "", fmt.Errorf("LLM_API_KEY not configured")
-	}
-
 	messages := []Message{
 		{
 			Role: "user",
@@ -1060,44 +980,6 @@ func (c *Client) AnalyzeMealImage(imageBase64 string) (string, error) {
 		},
 	}
 
-	reqBody := ChatRequest{
-		Model:     "gpt-4o-mini", // Use mini for cost efficiency
-		Messages:  messages,
-		MaxTokens: 500,
-	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", err
-	}
-
-	req, _ := http.NewRequest("POST", c.baseURL+"/chat/completions", bytes.NewBuffer(jsonData))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("Vision API error: %s", string(body))
-	}
-
-	var chatResp ChatResponse
-	json.NewDecoder(resp.Body).Decode(&chatResp)
-
-	if len(chatResp.Choices) == 0 {
-		return "", fmt.Errorf("no response from Vision AI")
-	}
-
-	// Content might be string in response
-	contentStr, ok := chatResp.Choices[0].Message.Content.(string)
-	if !ok {
-		return "", fmt.Errorf("unexpected content format from Vision AI")
-	}
-
-	return contentStr, nil
+	resp, _, err := c.Chat(messages)
+	return resp, err
 }

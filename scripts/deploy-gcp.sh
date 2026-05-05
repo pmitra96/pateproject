@@ -112,7 +112,12 @@ create_or_update_secret() {
 }
 
 create_or_update_secret "DATABASE_URL" "$DATABASE_URL"
-create_or_update_secret "LLM_API_KEY" "$LLM_API_KEY"
+create_or_update_secret "PYTHON_EXTRACTOR_URL" "$PYTHON_EXTRACTOR_URL"
+create_or_update_secret "GEMINI_API_KEY" "$GEMINI_API_KEY"
+create_or_update_secret "OPENAI_API_KEY" "$OPENAI_API_KEY"
+create_or_update_secret "LLM_PROVIDER" "$LLM_PROVIDER"
+create_or_update_secret "GEMINI_MODEL" "$GEMINI_MODEL"
+create_or_update_secret "OPENAI_MODEL" "$OPENAI_MODEL"
 create_or_update_secret "INGESTION_API_KEY" "$INGESTION_API_KEY"
 create_or_update_secret "ALLOWED_ORIGINS" "$ALLOWED_ORIGINS"
 create_or_update_secret "WHATSAPP_VERIFY_TOKEN" "$WHATSAPP_VERIFY_TOKEN"
@@ -136,7 +141,7 @@ if [ "$DEPLOY_BACKEND" = true ]; then
         --allow-unauthenticated \
         --memory 512Mi \
         --cpu 1 \
-        --set-secrets="DATABASE_URL=DATABASE_URL:latest,LLM_API_KEY=LLM_API_KEY:latest,INGESTION_API_KEY=INGESTION_API_KEY:latest,ALLOWED_ORIGINS=ALLOWED_ORIGINS:latest,WHATSAPP_VERIFY_TOKEN=WHATSAPP_VERIFY_TOKEN:latest,WHATSAPP_ACCESS_TOKEN=WHATSAPP_ACCESS_TOKEN:latest,WHATSAPP_PHONE_NUMBER_ID=WHATSAPP_PHONE_NUMBER_ID:latest,JWT_SECRET=JWT_SECRET:latest"
+        --set-secrets="DATABASE_URL=DATABASE_URL:latest,PYTHON_EXTRACTOR_URL=PYTHON_EXTRACTOR_URL:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,LLM_PROVIDER=LLM_PROVIDER:latest,GEMINI_MODEL=GEMINI_MODEL:latest,OPENAI_MODEL=OPENAI_MODEL:latest,INGESTION_API_KEY=INGESTION_API_KEY:latest,ALLOWED_ORIGINS=ALLOWED_ORIGINS:latest,WHATSAPP_VERIFY_TOKEN=WHATSAPP_VERIFY_TOKEN:latest,WHATSAPP_ACCESS_TOKEN=WHATSAPP_ACCESS_TOKEN:latest,WHATSAPP_PHONE_NUMBER_ID=WHATSAPP_PHONE_NUMBER_ID:latest,JWT_SECRET=JWT_SECRET:latest"
 
     BACKEND_URL=$($GCLOUD_PATH run services describe $BACKEND_SERVICE --platform managed --region $REGION --format='value(status.url)')
     echo "  ✅ Backend deployed: $BACKEND_URL"

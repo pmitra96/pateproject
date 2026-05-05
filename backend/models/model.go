@@ -262,7 +262,21 @@ type OTP struct {
 	ExpiresAt time.Time `gorm:"not null" json:"expires_at"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// ProcessedWebhook stores message IDs to prevent double processing of Meta retries
+type ProcessedWebhook struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	MessageID string    `gorm:"size:255;not null;uniqueIndex" json:"message_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
  
+type DebugLog struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Level     string    `gorm:"size:20" json:"level"` // "ERROR", "INFO"
+	Message   string    `gorm:"type:text" json:"message"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // LLMUsageLog tracks token usage for monitoring and billing
 type LLMUsageLog struct {
 	ID               uint      `gorm:"primaryKey" json:"id"`
