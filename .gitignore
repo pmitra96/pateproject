@@ -44,3 +44,5 @@ main
 Thumbs.db
 Oauth.txt
 client_secret_*.json
+*.db
+backend/tests/
