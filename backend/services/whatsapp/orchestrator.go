@@ -27,6 +27,14 @@ func NewOrchestrator() *Orchestrator {
 	r.Register("get_leftover_budget", HandleGetBudget)
 	r.Register("update_user_profile", HandleUpdateProfile)
 	r.Register("update_pantry", HandleUpdatePantry)
+	r.Register("get_daily_summary", HandleGetDailySummary)
+	r.Register("modify_logged_meal", HandleModifyMeal)
+	r.Register("get_past_day_summary", HandleGetPastDaySummary)
+	r.Register("clear_all_meals_today", HandleClearAllMealsToday)
+	r.Register("create_recipe", HandleCreateRecipe)
+	r.Register("get_pantry", HandleGetPantry)
+	r.Register("get_recipes", HandleGetRecipes)
+	r.Register("delete_recipe", HandleDeleteRecipe)
 	
 	return &Orchestrator{Registry: r}
 }
@@ -101,7 +109,8 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	for _, tc := range assistantMsg.ToolCalls {
 		resp, err := o.Registry.Execute(s, tc)
 		if err != nil {
-			s.Logger.Error("Tool Execution Error", "tool", tc.Function.Name, "error", err)
+			s.Logger.Warn("Tool Execution Error", "tool", tc.Function.Name, "error", err)
+			toolResponses = append(toolResponses, fmt.Sprintf("I tried to use '%s' but it's not available right now.", tc.Function.Name))
 			continue
 		}
 		if resp != "" {
@@ -112,7 +121,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	if len(toolResponses) > 0 {
 		s.Reply(strings.Join(toolResponses, "\n\n"))
 	} else {
-		s.Reply("I've processed your request, but I don't have a specific update for you.")
+		s.Reply(MsgErrorEmpty)
 	}
 }
 
