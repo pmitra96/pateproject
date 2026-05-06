@@ -34,10 +34,39 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 			continue
 		}
 
-		preState, _ := services.ComputeRemainingDayState(s.User.ID, time.Now())
+		now := time.Now()
+		preState, _ := services.ComputeRemainingDayState(s.User.ID, now)
 		controlMode := "NORMAL"
 		if preState != nil {
 			controlMode = preState.ControlMode
+		}
+
+		if existing, err := recentDuplicateMeal(s.User.ID, mealType, dishName, ingredients, now); err == nil && existing != nil {
+			database.DB.Model(&models.MealLog{}).Where("id = ?", existing.ID).Updates(map[string]any{
+				"calories":    estimated.Calories,
+				"protein":     estimated.Protein,
+				"carbs":       estimated.Carbs,
+				"fat":         estimated.Fat,
+				"fiber":       estimated.Fiber,
+				"ingredients": ingredients,
+				"updated_at":  now,
+			})
+			entries = append(entries, map[string]any{
+				"dish_name":    existing.Name,
+				"meal_type":    existing.MealType,
+				"ok":           true,
+				"action":       "merged_duplicate",
+				"meal_id":      existing.ID,
+				"calories":     estimated.Calories,
+				"protein":      estimated.Protein,
+				"carbs":        estimated.Carbs,
+				"fat":          estimated.Fat,
+				"fiber":        estimated.Fiber,
+				"serving_size": estimated.ServingSize,
+				"logged_at":    existing.LoggedAt.Format(time.RFC3339),
+				"display_time": userReadableTime(s.User.ID, existing.LoggedAt),
+			})
+			continue
 		}
 
 		mealLog := models.MealLog{
@@ -50,7 +79,7 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 			Carbs:            estimated.Carbs,
 			Fat:              estimated.Fat,
 			Fiber:            estimated.Fiber,
-			LoggedAt:         time.Now(),
+			LoggedAt:         now,
 			ControlModeAtLog: controlMode,
 		}
 		database.DB.Create(&mealLog)
@@ -59,6 +88,7 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 			"calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber,
 			"serving_size": estimated.ServingSize,
 			"logged_at":    mealLog.LoggedAt.Format(time.RFC3339),
+			"display_time": userReadableTime(s.User.ID, mealLog.LoggedAt),
 		})
 	}
 

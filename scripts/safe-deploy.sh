@@ -35,10 +35,20 @@ else
 fi
 cd ..
 
-# 3. Run Live Smoke Tests (blocking when enabled)
+# 3. Run deterministic conversation quality gate (blocking)
+echo ""
+echo "🧱 STEP 2: Running Conversation Quality Gate..."
+if bash scripts/quality-gate.sh; then
+    echo "✅ Quality Gate Passed!"
+else
+    echo "❌ Quality Gate Failed! Aborting deployment."
+    exit 1
+fi
+
+# 4. Run Live Smoke Tests (blocking when enabled)
 echo ""
 if [ "$RUN_LLM_SMOKE_TEST" = "true" ]; then
-    echo "🧠 STEP 2: Running Live LLM Smoke Tests..."
+    echo "🧠 STEP 3: Running Live LLM Smoke Tests..."
     cd backend
     if LLM_SMOKE_TEST=true LLM_PROVIDER=openai OPENAI_MODEL="${OPENAI_MODEL}" go test -v -run TestWhatsAppLLMSmoke ./tests/...; then
         echo "✅ Smoke Tests Passed!"
@@ -48,12 +58,12 @@ if [ "$RUN_LLM_SMOKE_TEST" = "true" ]; then
     fi
     cd ..
 else
-    echo "🧠 STEP 2: Skipping Live LLM Smoke Tests (RUN_LLM_SMOKE_TEST=false)"
+    echo "🧠 STEP 3: Skipping Live LLM Smoke Tests (RUN_LLM_SMOKE_TEST=false)"
 fi
 
-# 4. Trigger Deployment
+# 5. Trigger Deployment
 echo ""
-echo "🚀 STEP 3: All tests passed! Triggering GCP Deployment..."
+echo "🚀 STEP 4: All tests passed! Triggering GCP Deployment..."
 bash scripts/deploy-gcp.sh "$@" --cost-mode "$COST_MODE"
 
 echo ""

@@ -22,8 +22,8 @@ type Orchestrator struct {
 }
 
 type toolExecutionResult struct {
-	ToolName      string `json:"tool_name"`
-	Response      any    `json:"response"`
+	ToolName string `json:"tool_name"`
+	Response any    `json:"response"`
 }
 
 func NewOrchestrator() *Orchestrator {
@@ -47,15 +47,18 @@ func NewOrchestrator() *Orchestrator {
 	r.Register("get_active_goal", HandleGetActiveGoal)
 	r.Register("get_user_profile", HandleGetUserProfile)
 	r.Register("get_recent_orders", HandleGetRecentOrders)
-	
+
 	return &Orchestrator{Registry: r}
 }
 
 func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 string) {
 	// 1. Daily Limit Check
 	var count int64
-	todayStart, _ := dayWindow(time.Now())
-	database.DB.Model(&models.LLMUsageLog{}).Where("user_id = ? AND created_at >= ?", s.User.ID, todayStart).Count(&count)
+	nowLocal := time.Now().In(userLocationForDisplay(s.User.ID))
+	todayStart, todayEnd := dayWindow(nowLocal)
+	database.DB.Model(&models.LLMUsageLog{}).
+		Where("user_id = ? AND created_at >= ? AND created_at < ?", s.User.ID, todayStart, todayEnd).
+		Count(&count)
 	if count >= int64(config.GetWhatsAppDailyLimit()) {
 		s.Logger.Warn("User reached daily limit")
 		o.replySafe(s, MsgErrorLimit)
@@ -206,8 +209,8 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 		}
 
 		toolResults = append(toolResults, toolExecutionResult{
-			ToolName:      tc.Function.Name,
-			Response:      parseToolResponse(resp),
+			ToolName: tc.Function.Name,
+			Response: parseToolResponse(resp),
 		})
 
 		if resp != "" {
@@ -244,7 +247,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 		o.replySafe(s, MsgErrorEmpty)
 		return
 	}
-			o.replySafe(s, strings.Join(toolResponses, "\n\n"))
+	o.replySafe(s, strings.Join(toolResponses, "\n\n"))
 }
 
 func (o *Orchestrator) tryHeuristicFallback(s *Session, text string) string {
@@ -333,13 +336,25 @@ func (o *Orchestrator) buildUserContext(user *models.User) string {
 	var prefs models.UserPreferences
 	database.DB.Where("user_id = ?", user.ID).First(&prefs)
 	profile := "\nUSER PROFILE: "
-	if prefs.Height > 0 { profile += fmt.Sprintf("Height: %.1fcm. ", prefs.Height) }
-	if prefs.Weight > 0 { profile += fmt.Sprintf("Weight: %.1fkg. ", prefs.Weight) }
-	if prefs.Age > 0 { profile += fmt.Sprintf("Age: %d. ", prefs.Age) }
-	if prefs.Gender != "" { profile += fmt.Sprintf("Gender: %s. ", prefs.Gender) }
-	if prefs.ActivityLevel != "" { profile += fmt.Sprintf("Activity: %s. ", prefs.ActivityLevel) }
-	if prefs.Timezone != "" { profile += fmt.Sprintf("Timezone: %s. ", prefs.Timezone) }
-	
+	if prefs.Height > 0 {
+		profile += fmt.Sprintf("Height: %.1fcm. ", prefs.Height)
+	}
+	if prefs.Weight > 0 {
+		profile += fmt.Sprintf("Weight: %.1fkg. ", prefs.Weight)
+	}
+	if prefs.Age > 0 {
+		profile += fmt.Sprintf("Age: %d. ", prefs.Age)
+	}
+	if prefs.Gender != "" {
+		profile += fmt.Sprintf("Gender: %s. ", prefs.Gender)
+	}
+	if prefs.ActivityLevel != "" {
+		profile += fmt.Sprintf("Activity: %s. ", prefs.ActivityLevel)
+	}
+	if prefs.Timezone != "" {
+		profile += fmt.Sprintf("Timezone: %s. ", prefs.Timezone)
+	}
+
 	return context + profile
 }
 
@@ -362,7 +377,7 @@ func (o *Orchestrator) updateHistory(userID uint, userText string, assistantMsg 
 			updatedHistory = updatedHistory[len(updatedHistory)-config.GetWhatsAppHistoryWindow():]
 		}
 		historyJSON, _ := json.Marshal(updatedHistory)
-		
+
 		if latestConv.ID == 0 {
 			return tx.Create(&models.Conversation{UserID: userID, Messages: string(historyJSON)}).Error
 		}
@@ -397,7 +412,9 @@ func (o *Orchestrator) extractText(msg *llm.Message) string {
 	case []llm.ContentPart:
 		var res string
 		for _, p := range v {
-			if p.Type == "text" { res += p.Text }
+			if p.Type == "text" {
+				res += p.Text
+			}
 		}
 		return res
 	}

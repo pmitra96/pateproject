@@ -73,33 +73,39 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 	targetDish, _ := args["target_dish_name"].(string)
 	newIngredients, _ := args["new_ingredients"].(string)
 
-	nowLocal := time.Now().In(userLocationForDisplay(s.User.ID))
-	todayStart, _ := dayWindow(nowLocal)
+	loc := userLocationForDisplay(s.User.ID)
+	nowLocal := time.Now().In(loc)
+	todayStart, todayEnd := dayWindow(nowLocal)
+	candidates, err := findMealsForDay(s.User.ID, mealType, todayStart, todayEnd)
+	if err != nil {
+		return `{"ok":false,"error":"meal_lookup_failed"}`, nil
+	}
 
 	switch action {
 	case "delete":
-		if targetDish == "" {
-			return `{"ok":false,"error":"target_dish_required"}`, nil
+		meal, reason, ok := selectMealForCorrection(candidates, targetDish)
+		if !ok {
+			if reason == "ambiguous_target" {
+				return jsonString(ambiguousMealsPayload(candidates, reason)), nil
+			}
+			return jsonString(map[string]any{"ok": false, "error": reason, "meal_type": mealType, "dish_name": targetDish}), nil
 		}
-		result := database.DB.Where("user_id = ? AND meal_type = ? AND LOWER(name) = ? AND logged_at >= ?",
-			s.User.ID, mealType, strings.ToLower(targetDish), todayStart).Delete(&models.MealLog{})
-		if result.RowsAffected == 0 {
-			return jsonString(map[string]any{"ok": false, "error": "meal_not_found", "meal_type": mealType, "dish_name": targetDish}), nil
-		}
-		return jsonString(map[string]any{"ok": true, "action": "delete", "meal_type": mealType, "dish_name": targetDish}), nil
+		database.DB.Delete(&models.MealLog{}, meal.ID)
+		return jsonString(map[string]any{"ok": true, "action": "delete", "meal_id": meal.ID, "meal_type": meal.MealType, "dish_name": meal.Name}), nil
 
 	case "update":
 		if targetDish == "" || newIngredients == "" {
 			return `{"ok":false,"error":"target_dish_and_ingredients_required"}`, nil
 		}
-		var meal models.MealLog
-		err := database.DB.Where("user_id = ? AND meal_type = ? AND LOWER(name) LIKE ? AND logged_at >= ?",
-			s.User.ID, mealType, "%"+strings.ToLower(targetDish)+"%", todayStart).First(&meal).Error
-		if err != nil {
-			return jsonString(map[string]any{"ok": false, "error": "meal_not_found", "meal_type": mealType, "dish_name": targetDish}), nil
+		meal, reason, ok := selectMealForCorrection(candidates, targetDish)
+		if !ok {
+			if reason == "ambiguous_target" {
+				return jsonString(ambiguousMealsPayload(candidates, reason)), nil
+			}
+			return jsonString(map[string]any{"ok": false, "error": reason, "meal_type": mealType, "dish_name": targetDish}), nil
 		}
-		estimated, err := ns.EstimateNutritionFromQuery(s.User.ID, newIngredients)
-		if err != nil || estimated == nil {
+		estimated, estErr := ns.EstimateNutritionFromQuery(s.User.ID, newIngredients)
+		if estErr != nil || estimated == nil {
 			return `{"ok":false,"error":"nutrition_estimation_failed"}`, nil
 		}
 		database.DB.Model(&meal).Updates(map[string]interface{}{
@@ -110,7 +116,7 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 			"fat":         estimated.Fat,
 			"fiber":       estimated.Fiber,
 		})
-		return jsonString(map[string]any{"ok": true, "action": "update", "meal_id": meal.ID, "dish_name": targetDish, "calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber, "serving_size": estimated.ServingSize}), nil
+		return jsonString(map[string]any{"ok": true, "action": "update", "meal_id": meal.ID, "dish_name": meal.Name, "calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber, "serving_size": estimated.ServingSize}), nil
 
 	case "add":
 		if newIngredients == "" {
@@ -146,19 +152,20 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 // HandleGetPastDaySummary shows meals for a specific past date
 func HandleGetPastDaySummary(s *Session, args map[string]interface{}) (string, error) {
 	dateStr, _ := args["date"].(string)
-	date, err := time.Parse("2006-01-02", dateStr)
+	loc := userLocationForDisplay(s.User.ID)
+	date, err := time.ParseInLocation("2006-01-02", dateStr, loc)
 	if err != nil {
 		return `{"ok":false,"error":"invalid_date_format"}`, nil
 	}
 
-	nextDay := date.Add(24 * time.Hour)
+	dayStart, nextDay := dayWindow(date)
 	var meals []models.MealLog
-	database.DB.Where("user_id = ? AND logged_at >= ? AND logged_at < ?", s.User.ID, date, nextDay).
+	database.DB.Where("user_id = ? AND logged_at >= ? AND logged_at < ?", s.User.ID, dayStart, nextDay).
 		Order("logged_at ASC").Find(&meals)
 
 	if len(meals) == 0 {
 		return jsonString(map[string]any{
-			"ok": true, "date": dateStr, "meals": []string{},
+			"ok": true, "date": dayStart.Format("2006-01-02"), "meals": []string{},
 			"totals": map[string]any{"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "fiber": 0},
 		}), nil
 	}
