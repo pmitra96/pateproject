@@ -165,6 +165,26 @@ type MealLog struct {
 	DeletedAt          gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
+// MealComponent stores canonical parsed meal items so edits/summaries can be deterministic.
+type MealComponent struct {
+	ID         uint           `gorm:"primaryKey" json:"id"`
+	UserID     uint           `gorm:"not null;index" json:"user_id"`
+	MealLogID  uint           `gorm:"not null;index" json:"meal_log_id"`
+	Name       string         `gorm:"size:255;not null" json:"name"`
+	Quantity   float64        `gorm:"default:0" json:"quantity"`
+	Unit       string         `gorm:"size:32" json:"unit"`
+	Calories   float64        `gorm:"default:0" json:"calories"`
+	Protein    float64        `gorm:"default:0" json:"protein"`
+	Carbs      float64        `gorm:"default:0" json:"carbs"`
+	Fat        float64        `gorm:"default:0" json:"fat"`
+	Fiber      float64        `gorm:"default:0" json:"fiber"`
+	SourceType string         `gorm:"size:32" json:"source_type"` // label, brand_db, estimate
+	Confidence float64        `gorm:"default:0.5" json:"confidence"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
 // Conversation stores chat conversation summaries for users
 type Conversation struct {
 	ID        uint           `gorm:"primaryKey" json:"id"`
@@ -278,7 +298,7 @@ type ProcessedWebhook struct {
 	MessageID string    `gorm:"size:255;not null;uniqueIndex" json:"message_id"`
 	CreatedAt time.Time `json:"created_at"`
 }
- 
+
 type DebugLog struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
 	Level     string    `gorm:"size:20" json:"level"` // "ERROR", "INFO"

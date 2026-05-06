@@ -48,6 +48,7 @@ func InitDB() {
 		&models.PantryItem{},
 		&models.Goal{},
 		&models.MealLog{},
+		&models.MealComponent{},
 		&models.Conversation{},
 		&models.ConversationState{},
 		&models.UserPreferences{},

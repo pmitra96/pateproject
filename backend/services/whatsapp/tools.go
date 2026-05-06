@@ -51,6 +51,7 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 				"ingredients": ingredients,
 				"updated_at":  now,
 			})
+			syncMealComponents(s.User.ID, existing.ID, ingredients, estimated)
 			entries = append(entries, map[string]any{
 				"dish_name":    existing.Name,
 				"meal_type":    existing.MealType,
@@ -83,6 +84,7 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 			ControlModeAtLog: controlMode,
 		}
 		database.DB.Create(&mealLog)
+		syncMealComponents(s.User.ID, mealLog.ID, ingredients, estimated)
 		entries = append(entries, map[string]any{
 			"dish_name": dishName, "meal_type": mealType, "ok": true,
 			"calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber,

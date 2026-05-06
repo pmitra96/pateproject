@@ -83,6 +83,9 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 
 	// 4.5 V2 deterministic router for core intents.
 	state := getConversationState(s.User.ID)
+	if handled := o.tryResolvePendingMealSelection(s, state, text); handled {
+		return
+	}
 	decision := routeWhatsAppMessage(text, state)
 	s.Logger.Info("V2 route decision", "intent", decision.Intent, "tool", decision.ToolName, "needs_llm", decision.NeedsLLM)
 	if !decision.NeedsLLM {
@@ -113,6 +116,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	// 5. Call LLM
 	llmClient := llm.NewClient()
 	startTime := time.Now()
+	history = compactHistoryForLLM(history, 12)
 	assistantMsg, usage, err := llmClient.ProcessWhatsAppConversation(text, imageBase64, history, userContext)
 	duration := time.Since(startTime)
 
@@ -137,6 +141,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 		Feature:          "whatsapp",
 		CreatedAt:        time.Now(),
 	})
+	s.Logger.Info("LLM usage", "prompt_tokens", usage.PromptTokens, "completion_tokens", usage.CompletionTokens, "total_tokens", usage.TotalTokens, "history_len", len(history))
 
 	// 7. Update History
 	o.updateHistory(s.User.ID, text, assistantMsg)
@@ -192,6 +197,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 			}
 			o.replySafe(s, MsgErrorEmpty)
 		} else {
+			s.Logger.Info("Reply mode", "type", "direct_llm")
 			o.replySafe(s, content)
 		}
 		return
@@ -238,6 +244,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 		}
 		finalReply := o.composeFinalReplyFromToolResults(llmClient, text, toolResults)
 		if finalReply != "" {
+			s.Logger.Info("Reply mode", "type", "tool_second_pass", "tool_count", len(toolResults))
 			o.replySafe(s, finalReply)
 			return
 		}
@@ -247,6 +254,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 		o.replySafe(s, MsgErrorEmpty)
 		return
 	}
+	s.Logger.Info("Reply mode", "type", "tool_raw", "tool_count", len(toolResponses))
 	o.replySafe(s, strings.Join(toolResponses, "\n\n"))
 }
 
@@ -595,6 +603,76 @@ func (o *Orchestrator) appendConversationTurn(userID uint, userText, assistantTe
 		}
 		return tx.Model(&conv).Update("messages", string(raw)).Error
 	})
+}
+
+func compactHistoryForLLM(history []llm.Message, max int) []llm.Message {
+	if max <= 0 || len(history) <= max {
+		return history
+	}
+	return history[len(history)-max:]
+}
+
+func (o *Orchestrator) tryResolvePendingMealSelection(s *Session, st *models.ConversationState, text string) bool {
+	if st == nil || st.PendingMealAction == "" {
+		return false
+	}
+	ids := getPendingMealIDs(st)
+	if len(ids) == 0 {
+		clearPendingMealSelection(st)
+		return false
+	}
+
+	selectedID, ok := resolveMealChoiceFromText(text, ids)
+	if !ok {
+		return false
+	}
+
+	var meal models.MealLog
+	if err := database.DB.Where("user_id = ? AND id = ?", s.User.ID, selectedID).First(&meal).Error; err != nil {
+		clearPendingMealSelection(st)
+		return false
+	}
+
+	args := map[string]interface{}{
+		"action":           st.PendingMealAction,
+		"meal_id":          float64(selectedID),
+		"meal_type":        meal.MealType,
+		"target_dish_name": meal.Name,
+	}
+	if st.PendingMealAction == "update" {
+		args["new_ingredients"] = text
+	}
+	tc := buildToolCall("modify_logged_meal", args)
+	resp, err := o.Registry.Execute(s, tc)
+	clearPendingMealSelection(st)
+	if err != nil || strings.TrimSpace(resp) == "" {
+		return false
+	}
+	o.replySafe(s, "Updated. "+resp)
+	o.appendConversationTurn(s.User.ID, text, "Updated.")
+	return true
+}
+
+func resolveMealChoiceFromText(text string, ids []uint) (uint, bool) {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "first" || strings.Contains(lower, "first one") || lower == "1" {
+		return ids[0], true
+	}
+	if lower == "second" || strings.Contains(lower, "second one") || lower == "2" {
+		if len(ids) >= 2 {
+			return ids[1], true
+		}
+	}
+	if strings.Contains(lower, "last") {
+		return ids[len(ids)-1], true
+	}
+	for i := range ids {
+		n := i + 1
+		if strings.Contains(lower, strconv.Itoa(n)) {
+			return ids[i], true
+		}
+	}
+	return 0, false
 }
 
 func isGoalSetRequest(text string) bool {

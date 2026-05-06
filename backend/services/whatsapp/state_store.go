@@ -1,6 +1,7 @@
 package whatsapp
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/pmitra96/pateproject/database"
@@ -27,14 +28,18 @@ func updateConversationStateAfterReply(st *models.ConversationState, intent, rep
 	st.LastIntent = intent
 	st.LastTool = ""
 	st.LastToolResult = reply
+	st.PendingMealAction = ""
+	st.PendingMealOptions = ""
 	st.TurnCount++
 	st.UpdatedAt = time.Now()
 	database.DB.Model(&models.ConversationState{}).Where("user_id = ?", st.UserID).Updates(map[string]interface{}{
-		"last_intent":      st.LastIntent,
-		"last_tool":        st.LastTool,
-		"last_tool_result": st.LastToolResult,
-		"turn_count":       st.TurnCount,
-		"updated_at":       st.UpdatedAt,
+		"last_intent":          st.LastIntent,
+		"last_tool":            st.LastTool,
+		"last_tool_result":     st.LastToolResult,
+		"pending_meal_action":  st.PendingMealAction,
+		"pending_meal_options": st.PendingMealOptions,
+		"turn_count":           st.TurnCount,
+		"updated_at":           st.UpdatedAt,
 	})
 }
 
@@ -45,13 +50,55 @@ func updateConversationStateAfterTool(st *models.ConversationState, intent, tool
 	st.LastIntent = intent
 	st.LastTool = toolName
 	st.LastToolResult = toolResult
+	st.PendingMealAction = ""
+	st.PendingMealOptions = ""
 	st.TurnCount++
 	st.UpdatedAt = time.Now()
 	database.DB.Model(&models.ConversationState{}).Where("user_id = ?", st.UserID).Updates(map[string]interface{}{
-		"last_intent":      st.LastIntent,
-		"last_tool":        st.LastTool,
-		"last_tool_result": st.LastToolResult,
-		"turn_count":       st.TurnCount,
-		"updated_at":       st.UpdatedAt,
+		"last_intent":          st.LastIntent,
+		"last_tool":            st.LastTool,
+		"last_tool_result":     st.LastToolResult,
+		"pending_meal_action":  st.PendingMealAction,
+		"pending_meal_options": st.PendingMealOptions,
+		"turn_count":           st.TurnCount,
+		"updated_at":           st.UpdatedAt,
 	})
+}
+
+func setPendingMealSelection(st *models.ConversationState, action string, mealIDs []uint) {
+	if st == nil {
+		return
+	}
+	raw, _ := json.Marshal(mealIDs)
+	st.PendingMealAction = action
+	st.PendingMealOptions = string(raw)
+	st.UpdatedAt = time.Now()
+	database.DB.Model(&models.ConversationState{}).Where("user_id = ?", st.UserID).Updates(map[string]interface{}{
+		"pending_meal_action":  st.PendingMealAction,
+		"pending_meal_options": st.PendingMealOptions,
+		"updated_at":           st.UpdatedAt,
+	})
+}
+
+func clearPendingMealSelection(st *models.ConversationState) {
+	if st == nil {
+		return
+	}
+	st.PendingMealAction = ""
+	st.PendingMealOptions = ""
+	st.UpdatedAt = time.Now()
+	database.DB.Model(&models.ConversationState{}).Where("user_id = ?", st.UserID).Updates(map[string]interface{}{
+		"pending_meal_action":  "",
+		"pending_meal_options": "",
+		"updated_at":           st.UpdatedAt,
+	})
+}
+
+func getPendingMealIDs(st *models.ConversationState) []uint {
+	if st == nil || st.PendingMealOptions == "" {
+		return nil
+	}
+	var ids []uint
+	_ = json.Unmarshal([]byte(st.PendingMealOptions), &ids)
+	return ids
 }

@@ -83,9 +83,21 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 
 	switch action {
 	case "delete":
+		if idNum, ok := args["meal_id"].(float64); ok && idNum > 0 {
+			var meal models.MealLog
+			if err := database.DB.Where("user_id = ? AND id = ?", s.User.ID, uint(idNum)).First(&meal).Error; err == nil {
+				database.DB.Delete(&models.MealLog{}, meal.ID)
+				return jsonString(map[string]any{"ok": true, "action": "delete", "meal_id": meal.ID, "meal_type": meal.MealType, "dish_name": meal.Name}), nil
+			}
+		}
 		meal, reason, ok := selectMealForCorrection(candidates, targetDish)
 		if !ok {
 			if reason == "ambiguous_target" {
+				ids := make([]uint, 0, len(candidates))
+				for _, c := range candidates {
+					ids = append(ids, c.ID)
+				}
+				setPendingMealSelection(getConversationState(s.User.ID), "delete", ids)
 				return jsonString(ambiguousMealsPayload(candidates, reason)), nil
 			}
 			return jsonString(map[string]any{"ok": false, "error": reason, "meal_type": mealType, "dish_name": targetDish}), nil
@@ -97,9 +109,33 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 		if targetDish == "" || newIngredients == "" {
 			return `{"ok":false,"error":"target_dish_and_ingredients_required"}`, nil
 		}
+		if idNum, ok := args["meal_id"].(float64); ok && idNum > 0 {
+			var meal models.MealLog
+			if err := database.DB.Where("user_id = ? AND id = ?", s.User.ID, uint(idNum)).First(&meal).Error; err == nil {
+				estimated, estErr := ns.EstimateNutritionFromQuery(s.User.ID, newIngredients)
+				if estErr != nil || estimated == nil {
+					return `{"ok":false,"error":"nutrition_estimation_failed"}`, nil
+				}
+				database.DB.Model(&meal).Updates(map[string]interface{}{
+					"ingredients": newIngredients,
+					"calories":    estimated.Calories,
+					"protein":     estimated.Protein,
+					"carbs":       estimated.Carbs,
+					"fat":         estimated.Fat,
+					"fiber":       estimated.Fiber,
+				})
+				syncMealComponents(s.User.ID, meal.ID, newIngredients, estimated)
+				return jsonString(map[string]any{"ok": true, "action": "update", "meal_id": meal.ID, "dish_name": meal.Name, "calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber, "serving_size": estimated.ServingSize}), nil
+			}
+		}
 		meal, reason, ok := selectMealForCorrection(candidates, targetDish)
 		if !ok {
 			if reason == "ambiguous_target" {
+				ids := make([]uint, 0, len(candidates))
+				for _, c := range candidates {
+					ids = append(ids, c.ID)
+				}
+				setPendingMealSelection(getConversationState(s.User.ID), "update", ids)
 				return jsonString(ambiguousMealsPayload(candidates, reason)), nil
 			}
 			return jsonString(map[string]any{"ok": false, "error": reason, "meal_type": mealType, "dish_name": targetDish}), nil
@@ -116,6 +152,7 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 			"fat":         estimated.Fat,
 			"fiber":       estimated.Fiber,
 		})
+		syncMealComponents(s.User.ID, meal.ID, newIngredients, estimated)
 		return jsonString(map[string]any{"ok": true, "action": "update", "meal_id": meal.ID, "dish_name": meal.Name, "calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber, "serving_size": estimated.ServingSize}), nil
 
 	case "add":
@@ -143,6 +180,7 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 			LoggedAt:    time.Now(),
 		}
 		database.DB.Create(&newMeal)
+		syncMealComponents(s.User.ID, newMeal.ID, newIngredients, estimated)
 		return jsonString(map[string]any{"ok": true, "action": "add", "meal_id": newMeal.ID, "dish_name": dishName, "meal_type": mealType, "calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber, "serving_size": estimated.ServingSize}), nil
 	}
 
