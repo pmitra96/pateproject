@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/pmitra96/pateproject/config"
 	"github.com/pmitra96/pateproject/database"
@@ -11,6 +12,19 @@ import (
 	"github.com/pmitra96/pateproject/models"
 	"github.com/pmitra96/pateproject/services/whatsapp"
 )
+
+var runWhatsAppPayloadAsync = func(payload map[string]interface{}) {
+	go processWhatsAppPayload(payload)
+}
+
+var newWhatsAppClient = func() whatsapp.WhatsAppClient {
+	return whatsapp.NewClient()
+}
+
+var processWhatsAppIntent = func(session *whatsapp.Session, textBody string, imageBase64 string) {
+	orch := whatsapp.NewOrchestrator()
+	orch.ProcessMessage(session, textBody, imageBase64)
+}
 
 // VerifyWhatsAppWebhook handles the GET request from Meta to verify the webhook URL.
 func VerifyWhatsAppWebhook(w http.ResponseWriter, r *http.Request) {
@@ -39,51 +53,56 @@ func HandleWhatsAppMessage(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("EVENT_RECEIVED"))
 
-	go processWhatsAppPayload(payload)
+	runWhatsAppPayloadAsync(payload)
 }
 
 func processWhatsAppPayload(payload map[string]interface{}) {
-	// 1. Parse Meta Payload
 	entries, _ := payload["entry"].([]interface{})
-	if len(entries) == 0 { return }
-	entry, _ := entries[0].(map[string]interface{})
-	changes, _ := entry["changes"].([]interface{})
-	if len(changes) == 0 { return }
-	change, _ := changes[0].(map[string]interface{})
-	value, _ := change["value"].(map[string]interface{})
-	messages, _ := value["messages"].([]interface{})
-	if len(messages) == 0 { return }
-	message, _ := messages[0].(map[string]interface{})
+	for _, entryRaw := range entries {
+		entry, _ := entryRaw.(map[string]interface{})
+		changes, _ := entry["changes"].([]interface{})
+		for _, changeRaw := range changes {
+			change, _ := changeRaw.(map[string]interface{})
+			value, _ := change["value"].(map[string]interface{})
+			messages, _ := value["messages"].([]interface{})
+			for _, messageRaw := range messages {
+				message, _ := messageRaw.(map[string]interface{})
+				processSingleWhatsAppMessage(message)
+			}
+		}
+	}
+}
 
+func processSingleWhatsAppMessage(message map[string]interface{}) {
 	fromPhone, _ := message["from"].(string)
 	msgID, _ := message["id"].(string)
 
-	// 2. Immediate Read Receipt & Deduplication
-	client := whatsapp.NewClient()
+	client := newWhatsAppClient()
 	if msgID != "" {
-		client.MarkAsRead(msgID)
+		_ = client.MarkAsRead(msgID)
 		if err := database.DB.Create(&models.ProcessedWebhook{MessageID: msgID}).Error; err != nil {
-			return // Duplicate message
+			errText := strings.ToLower(err.Error())
+			if strings.Contains(errText, "duplicate") || strings.Contains(errText, "unique") {
+				return
+			}
+			logger.Error("Failed to persist webhook dedup key; continuing", "msgID", msgID, "error", err)
 		}
 	}
 
-	// 3. User Identification
 	user, err := GetOrCreateWhatsAppUser(fromPhone)
 	if err != nil {
 		logger.Error("User Provisioning Error", "error", err)
-		client.SendTextMessage(fromPhone, "Sorry, I had trouble identifying your account.")
+		_ = client.SendTextMessage(fromPhone, "Sorry, I had trouble identifying your account.")
 		return
 	}
 
-	// 4. Panic Recovery
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("WhatsApp Panic", "error", r, "msgID", msgID)
-			client.SendTextMessage(fromPhone, "⚠️ I encountered a technical error. Please try again in a few minutes!")
+			_ = client.SendTextMessage(fromPhone, "⚠️ I encountered a technical error. Please try again in a few minutes!")
 		}
 	}()
 
-	// 5. Resolve Content
 	var textBody string
 	var imageBase64 string
 	msgType, _ := message["type"].(string)
@@ -95,7 +114,7 @@ func processWhatsAppPayload(payload map[string]interface{}) {
 		imageObj, _ := message["image"].(map[string]interface{})
 		mediaID, _ := imageObj["id"].(string)
 		textBody, _ = imageObj["caption"].(string)
-		
+
 		imgBytes, err := client.DownloadMedia(mediaID)
 		if err == nil {
 			imageBase64 = base64.StdEncoding.EncodeToString(imgBytes)
@@ -105,11 +124,9 @@ func processWhatsAppPayload(payload map[string]interface{}) {
 	if textBody == "" && imageBase64 == "" {
 		return
 	}
-	
-	// 6. Orchestrate Intent
+
 	session := whatsapp.NewSession(user, msgID, logger.L().With("user_id", user.ID, "message_id", msgID))
-	orch := whatsapp.NewOrchestrator()
-	orch.ProcessMessage(session, textBody, imageBase64)
+	processWhatsAppIntent(session, textBody, imageBase64)
 }
 
 func GetOrCreateWhatsAppUser(phone string) (*models.User, error) {

@@ -10,16 +10,18 @@ type Provider interface {
 
 // NewProvider returns the configured LLM provider.
 func NewProvider() Provider {
-	providerType := config.GetEnv("LLM_PROVIDER", "smart")
+	providerType := config.GetEnv("LLM_PROVIDER", "openai")
 	
 	switch providerType {
-	case "smart":
-		return NewSmartRouterProvider()
-	case "gemini":
-		return NewGeminiProvider()
 	case "openai":
 		return NewOpenAIProvider()
+	case "smart":
+		// Keep backward compatibility, but route to OpenAI-only mode.
+		return NewOpenAIProvider()
+	case "gemini":
+		// Keep backward compatibility, but route to OpenAI-only mode.
+		return NewOpenAIProvider()
 	default:
-		return NewSmartRouterProvider() // Default to smart
+		return NewOpenAIProvider()
 	}
 }

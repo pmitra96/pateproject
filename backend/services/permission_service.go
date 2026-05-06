@@ -8,11 +8,13 @@ import (
 
 // FoodEstimate represents the nutritional estimate of a food item
 type FoodEstimate struct {
-	Name     string  `json:"name,omitempty"`
-	Calories float64 `json:"calories"`
-	Protein  float64 `json:"protein"`
-	Fat      float64 `json:"fat"`
-	Carbs    float64 `json:"carbs"`
+	Name        string  `json:"name,omitempty"`
+	ServingSize string  `json:"serving_size,omitempty"`
+	Calories    float64 `json:"calories"`
+	Protein     float64 `json:"protein"`
+	Fat         float64 `json:"fat"`
+	Carbs       float64 `json:"carbs"`
+	Fiber       float64 `json:"fiber"`
 }
 
 // PermissionResult represents the authoritative decision

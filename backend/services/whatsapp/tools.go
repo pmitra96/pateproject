@@ -18,10 +18,10 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 	ns := services.NewNutritionService()
 	meals, ok := args["meals"].([]interface{})
 	if !ok || len(meals) == 0 {
-		return "I couldn't identify any specific meals in your message. Could you please specify what you ate?", nil
+		return jsonString(map[string]any{"ok": false, "error": "no_meals_detected"}), nil
 	}
 
-	var summary []string
+	var entries []map[string]any
 	for _, m := range meals {
 		mealData, _ := m.(map[string]interface{})
 		dishName, _ := mealData["dish_name"].(string)
@@ -30,7 +30,7 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 
 		estimated, err := ns.EstimateNutritionFromQuery(s.User.ID, ingredients)
 		if err != nil || estimated == nil {
-			summary = append(summary, fmt.Sprintf("⚠️ *Could not estimate %s*: I had trouble calculating the calories for this item.", dishName))
+			entries = append(entries, map[string]any{"dish_name": dishName, "ok": false, "error": "nutrition_estimation_failed"})
 			continue
 		}
 
@@ -49,15 +49,21 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 			Protein:          estimated.Protein,
 			Carbs:            estimated.Carbs,
 			Fat:              estimated.Fat,
+			Fiber:            estimated.Fiber,
 			LoggedAt:         time.Now(),
 			ControlModeAtLog: controlMode,
 		}
 		database.DB.Create(&mealLog)
-		summary = append(summary, fmt.Sprintf("- %s (%.0f kcal)", dishName, estimated.Calories))
+		entries = append(entries, map[string]any{
+			"dish_name": dishName, "meal_type": mealType, "ok": true,
+			"calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber,
+			"serving_size": estimated.ServingSize,
+			"logged_at":    mealLog.LoggedAt.Format(time.RFC3339),
+		})
 	}
 
-	if len(summary) == 0 {
-		return "I had some trouble estimating the nutrition for those items.", nil
+	if len(entries) == 0 {
+		return jsonString(map[string]any{"ok": false, "error": "no_meals_logged"}), nil
 	}
 
 	newState, _ := services.ComputeRemainingDayState(s.User.ID, time.Now())
@@ -66,18 +72,22 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 		modeStr = "\n⚠️ WARNING: You are now in DAMAGE CONTROL mode!"
 	}
 
-	resp := MsgMealLogged + "\n" + strings.Join(summary, "\n")
+	res := map[string]any{"ok": true, "logged_meals": entries}
 	if newState != nil {
-		resp += fmt.Sprintf("\n\n*Remaining today:* %.0f kcal, %.1fg protein.%s",
-			newState.RemainingCalories, newState.RemainingProtein, modeStr)
+		res["remaining"] = map[string]any{
+			"calories": newState.RemainingCalories, "protein": newState.RemainingProtein, "carbs": newState.RemainingCarbs, "fat": newState.RemainingFat, "fiber": newState.RemainingFiber, "mode": newState.ControlMode,
+		}
 	}
-	return resp, nil
+	if modeStr != "" {
+		res["warning"] = "damage_control_mode"
+	}
+	return jsonString(res), nil
 }
 
 func HandleSetGoal(s *Session, args map[string]interface{}) (string, error) {
 	calories := int(args["calories"].(float64))
 	if calories <= 0 {
-		return "Please specify a valid calorie number above zero.", nil
+		return jsonString(map[string]any{"ok": false, "error": "invalid_calories"}), nil
 	}
 
 	var goal models.Goal
@@ -94,15 +104,17 @@ func HandleSetGoal(s *Session, args map[string]interface{}) (string, error) {
 			DailyProteinTarget: float64(calories) * 0.30 / 4,
 			DailyFatTarget:     float64(calories) * 0.30 / 9,
 			DailyCarbsTarget:   float64(calories) * 0.40 / 4,
+			DailyFiberTarget:   services.DefaultFiberTargetFromCalories(calories),
 		}
 		database.DB.Create(&profile)
 	} else {
 		database.DB.Model(&profile).Updates(map[string]interface{}{
 			"daily_calorie_target": calories,
+			"daily_fiber_target":   services.DefaultFiberTargetFromCalories(calories),
 			"updated_at":           time.Now(),
 		})
 	}
-	return fmt.Sprintf(MsgGoalUpdated, calories), nil
+	return jsonString(map[string]any{"ok": true, "daily_calorie_target": calories}), nil
 }
 
 func HandleAskAdvice(s *Session, args map[string]interface{}) (string, error) {
@@ -111,12 +123,12 @@ func HandleAskAdvice(s *Session, args map[string]interface{}) (string, error) {
 
 	state, _ := services.ComputeRemainingDayState(s.User.ID, time.Now())
 	if state == nil {
-		return "I couldn't find your daily goals. Please set them up first!", nil
+		return jsonString(map[string]any{"ok": false, "error": "goal_not_found"}), nil
 	}
 
 	estimated, err := ns.EstimateNutritionFromQuery(s.User.ID, foodName)
 	if err != nil || estimated == nil {
-		return "I'm having trouble estimating the nutrition for that right now.", nil
+		return jsonString(map[string]any{"ok": false, "error": "nutrition_estimation_failed"}), nil
 	}
 
 	result := services.CheckFoodPermission(state, *estimated)
@@ -125,16 +137,25 @@ func HandleAskAdvice(s *Session, args map[string]interface{}) (string, error) {
 		decision = "✅ Yes, you can eat this!"
 	}
 
-	return fmt.Sprintf("%s\n\n%s\n\nNutrition Est: %.0f kcal, %.1fg protein.", decision, result.Reason, estimated.Calories, estimated.Protein), nil
+	return jsonString(map[string]any{
+		"ok": true, "decision": decision, "reason": result.Reason,
+		"estimated": map[string]any{"calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber, "serving_size": estimated.ServingSize},
+		"status":    result.Status,
+	}), nil
 }
 
 func HandleGetBudget(s *Session, args map[string]interface{}) (string, error) {
 	state, _ := services.ComputeRemainingDayState(s.User.ID, time.Now())
 	if state == nil {
-		return "You haven't set up your goals yet!", nil
+		return jsonString(map[string]any{"ok": false, "error": "goal_not_found"}), nil
 	}
-	return fmt.Sprintf("📊 *Your Daily Budget:*\n\nRemaining Calories: %.0f kcal\nRemaining Protein: %.1f g\nRemaining Carbs: %.1f g\nRemaining Fat: %.1f g\n\nCurrent Mode: %s",
-		state.RemainingCalories, state.RemainingProtein, state.RemainingCarbs, state.RemainingFat, state.ControlMode), nil
+	return jsonString(map[string]any{
+		"ok": true,
+		"remaining": map[string]any{
+			"calories": state.RemainingCalories, "protein": state.RemainingProtein,
+			"carbs": state.RemainingCarbs, "fat": state.RemainingFat, "fiber": state.RemainingFiber, "mode": state.ControlMode,
+		},
+	}), nil
 }
 
 func HandleUpdateProfile(s *Session, args map[string]interface{}) (string, error) {
@@ -145,39 +166,53 @@ func HandleUpdateProfile(s *Session, args map[string]interface{}) (string, error
 	}
 
 	updates := make(map[string]interface{})
-	if h, ok := args["height"].(float64); ok { updates["height"] = h }
-	if w, ok := args["weight"].(float64); ok { updates["weight"] = w }
-	if a, ok := args["age"].(float64); ok { updates["age"] = int(a) }
-	if g, ok := args["gender"].(string); ok { updates["gender"] = g }
+	if h, ok := args["height"].(float64); ok {
+		updates["height"] = h
+	}
+	if w, ok := args["weight"].(float64); ok {
+		updates["weight"] = w
+	}
+	if a, ok := args["age"].(float64); ok {
+		updates["age"] = int(a)
+	}
+	if g, ok := args["gender"].(string); ok {
+		updates["gender"] = g
+	}
+	if al, ok := args["activity_level"].(string); ok && strings.TrimSpace(al) != "" {
+		updates["activity_level"] = strings.ToLower(strings.TrimSpace(al))
+	}
+	if tz, ok := args["timezone"].(string); ok && strings.TrimSpace(tz) != "" {
+		updates["timezone"] = strings.TrimSpace(tz)
+	}
 
 	if len(updates) == 0 {
-		return "I didn't see any profile details to update.", nil
+		return jsonString(map[string]any{"ok": false, "error": "no_profile_updates"}), nil
 	}
 
 	database.DB.Model(&models.UserPreferences{}).Where("user_id = ?", s.User.ID).Updates(updates)
-	return MsgProfileUpdated, nil
+	return jsonString(map[string]any{"ok": true, "updated_fields": updates}), nil
 }
 
 func HandleUpdatePantry(s *Session, args map[string]interface{}) (string, error) {
 	llmClient := llm.NewClient()
 	items, ok := args["items"].([]interface{})
 	if !ok {
-		return "I couldn't understand the pantry items.", nil
+		return jsonString(map[string]any{"ok": false, "error": "invalid_items_payload"}), nil
 	}
 
 	var updatedNames []string
 	ingredientChanges := make(map[uint]*pantryChange)
 	ingredientNames := make(map[uint]string)
-	
+
 	var rawNames []string
 	var results = make([]llm.PantryItemExtraction, len(items))
-	var itemsToExtract []int 
-	
+	var itemsToExtract []int
+
 	for i, it := range items {
 		itemMap, _ := it.(map[string]interface{})
 		name, _ := itemMap["name"].(string)
 		rawNames = append(rawNames, name)
-		
+
 		var mapping models.IngredientMapping
 		if err := database.DB.Where("LOWER(raw_name) = ?", strings.ToLower(name)).First(&mapping).Error; err == nil {
 			results[i] = llm.PantryItemExtraction{
@@ -195,7 +230,7 @@ func HandleUpdatePantry(s *Session, args map[string]interface{}) (string, error)
 		for _, idx := range itemsToExtract {
 			namesToCall = append(namesToCall, rawNames[idx])
 		}
-		
+
 		extractions, err := llmClient.ExtractPantryItemsBatch(namesToCall)
 		if err == nil {
 			for i, ext := range extractions {
@@ -221,7 +256,7 @@ func HandleUpdatePantry(s *Session, args map[string]interface{}) (string, error)
 		quantity, _ := itemMap["quantity"].(float64)
 		unit, _ := itemMap["unit"].(string)
 		action, _ := itemMap["action"].(string)
-		
+
 		ingredientName := results[i].Ingredient
 		if ingredientName == "" {
 			// Simpler normalization since this is a service now
@@ -230,7 +265,7 @@ func HandleUpdatePantry(s *Session, args map[string]interface{}) (string, error)
 
 		var ingredient models.Ingredient
 		database.DB.Where("LOWER(name) = ?", strings.ToLower(ingredientName)).FirstOrCreate(&ingredient, models.Ingredient{Name: ingredientName})
-		
+
 		if _, exists := ingredientChanges[ingredient.ID]; !exists {
 			ingredientChanges[ingredient.ID] = &pantryChange{
 				quantity: quantity,
@@ -253,7 +288,7 @@ func HandleUpdatePantry(s *Session, args map[string]interface{}) (string, error)
 	for ingID, change := range ingredientChanges {
 		var pi models.PantryItem
 		err := database.DB.Where("user_id = ? AND ingredient_id = ?", s.User.ID, ingID).First(&pi).Error
-		
+
 		if err != nil && err == gorm.ErrRecordNotFound {
 			var sampleItem models.Item
 			database.DB.Where("ingredient_id = ?", ingID).First(&sampleItem)
@@ -268,9 +303,12 @@ func HandleUpdatePantry(s *Session, args map[string]interface{}) (string, error)
 		current := pi.EffectiveQuantity()
 		var newQty float64
 		switch change.action {
-		case "add": newQty = current + change.quantity
-		case "set": newQty = change.quantity
-		case "remove": newQty = 0
+		case "add":
+			newQty = current + change.quantity
+		case "set":
+			newQty = change.quantity
+		case "remove":
+			newQty = 0
 		}
 
 		database.DB.Model(&pi).Updates(map[string]interface{}{
@@ -280,7 +318,7 @@ func HandleUpdatePantry(s *Session, args map[string]interface{}) (string, error)
 		updatedNames = append(updatedNames, fmt.Sprintf("%s (%.1f %s)", ingredientNames[ingID], newQty, change.unit))
 	}
 
-	return fmt.Sprintf("📦 *Pantry Updated!*\nUpdated: %s", strings.Join(updatedNames, ", ")), nil
+	return jsonString(map[string]any{"ok": true, "updated_items": updatedNames}), nil
 }
 
 type pantryChange struct {

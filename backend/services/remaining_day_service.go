@@ -37,12 +37,13 @@ func ComputeRemainingDayState(userID uint, date time.Time) (*models.RemainingDay
 	}
 
 	// 4. Sum consumed macros
-	var consumedCalories, consumedProtein, consumedFat, consumedCarbs float64
+	var consumedCalories, consumedProtein, consumedFat, consumedCarbs, consumedFiber float64
 	for _, meal := range meals {
 		consumedCalories += meal.Calories
 		consumedProtein += meal.Protein
 		consumedFat += meal.Fat
 		consumedCarbs += meal.Carbs
+		consumedFiber += meal.Fiber
 	}
 
 	// 5. Calculate remaining
@@ -50,6 +51,7 @@ func ComputeRemainingDayState(userID uint, date time.Time) (*models.RemainingDay
 	remainingProtein := profile.DailyProteinTarget - consumedProtein
 	remainingFat := profile.DailyFatTarget - consumedFat
 	remainingCarbs := profile.DailyCarbsTarget - consumedCarbs
+	remainingFiber := profile.DailyFiberTarget - consumedFiber
 
 	// 6. Determine Control Mode
 	controlMode := "NORMAL"
@@ -95,10 +97,12 @@ func ComputeRemainingDayState(userID uint, date time.Time) (*models.RemainingDay
 		RemainingProtein:  remainingProtein,
 		RemainingFat:      remainingFat,
 		RemainingCarbs:    remainingCarbs,
+		RemainingFiber:    remainingFiber,
 		TargetCalories:    float64(profile.DailyCalorieTarget),
 		TargetProtein:     profile.DailyProteinTarget,
 		TargetFat:         profile.DailyFatTarget,
 		TargetCarbs:       profile.DailyCarbsTarget,
+		TargetFiber:       profile.DailyFiberTarget,
 		MealsRemaining:    mealsRemaining,
 		ControlMode:       controlMode,
 		LastComputedAt:    time.Now(),

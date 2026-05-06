@@ -8,6 +8,10 @@ echo "================================================"
 echo "🛡️  STARTING SAFE DEPLOY PIPELINE"
 echo "================================================"
 
+# Low-cost defaults (override in environment if needed)
+: "${COST_MODE:=LOW}"
+: "${RUN_LLM_SMOKE_TEST:=false}"
+
 # 1. Load Environment
 ROOT_ENV="$(dirname "$0")/../.env"
 if [ -f "$ROOT_ENV" ]; then
@@ -15,11 +19,9 @@ if [ -f "$ROOT_ENV" ]; then
     export $(grep -v '^#' "$ROOT_ENV" | grep -v '^$' | xargs)
 fi
 
-# Ensure mandatory keys are present for smoke tests
-if [ -z "$OPENAI_API_KEY" ] && [ -z "$GEMINI_API_KEY" ]; then
-    echo "❌ Error: API keys missing. Cannot run smoke tests."
-    exit 1
-fi
+# Force OpenAI-only mode for tests and deploy.
+export LLM_PROVIDER="openai"
+export OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o-mini}"
 
 # 2. Run Unit Tests
 echo ""
@@ -33,21 +35,26 @@ else
 fi
 cd ..
 
-# 3. Run Live Smoke Tests (advisory, not blocking)
+# 3. Run Live Smoke Tests (blocking when enabled)
 echo ""
-echo "🧠 STEP 2: Running Live LLM Smoke Tests..."
-cd backend
-if LLM_SMOKE_TEST=true PREFERRED_LLM_MODEL=gpt-4o-mini go test -v -run TestWhatsAppLLMSmoke ./tests/...; then
-    echo "✅ Smoke Tests Passed!"
+if [ "$RUN_LLM_SMOKE_TEST" = "true" ]; then
+    echo "🧠 STEP 2: Running Live LLM Smoke Tests..."
+    cd backend
+    if LLM_SMOKE_TEST=true LLM_PROVIDER=openai OPENAI_MODEL="${OPENAI_MODEL}" go test -v -run TestWhatsAppLLMSmoke ./tests/...; then
+        echo "✅ Smoke Tests Passed!"
+    else
+        echo "❌ Smoke Tests Failed! Aborting deployment."
+        exit 1
+    fi
+    cd ..
 else
-    echo "⚠️  Smoke Tests had issues (likely LLM quota). Proceeding with deployment..."
+    echo "🧠 STEP 2: Skipping Live LLM Smoke Tests (RUN_LLM_SMOKE_TEST=false)"
 fi
-cd ..
 
 # 4. Trigger Deployment
 echo ""
 echo "🚀 STEP 3: All tests passed! Triggering GCP Deployment..."
-bash scripts/deploy-gcp.sh "$@"
+bash scripts/deploy-gcp.sh "$@" --cost-mode "$COST_MODE"
 
 echo ""
 echo "🎉 SAFE DEPLOY COMPLETE!"

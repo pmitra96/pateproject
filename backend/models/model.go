@@ -184,6 +184,8 @@ type UserPreferences struct {
 	Weight            float64        `json:"weight"` // in kg
 	Age               int            `json:"age"`
 	Gender            string         `gorm:"size:20" json:"gender"` // male, female, other
+	ActivityLevel     string         `gorm:"size:32" json:"activity_level"`
+	Timezone          string         `gorm:"size:64" json:"timezone"`
 	Country           string         `gorm:"size:100" json:"country"`
 	State             string         `gorm:"size:100" json:"state"`
 	City              string         `gorm:"size:100" json:"city"`
@@ -218,12 +220,14 @@ type RemainingDayState struct {
 	RemainingProtein  float64   `gorm:"not null" json:"remaining_protein"`
 	RemainingFat      float64   `gorm:"not null" json:"remaining_fat"`
 	RemainingCarbs    float64   `gorm:"not null" json:"remaining_carbs"`
+	RemainingFiber    float64   `gorm:"not null;default:0" json:"remaining_fiber"`
 
 	// Targets for the day (snapshot)
 	TargetCalories float64 `gorm:"default:0" json:"target_calories"`
 	TargetProtein  float64 `gorm:"default:0" json:"target_protein"`
 	TargetFat      float64 `gorm:"default:0" json:"target_fat"`
 	TargetCarbs    float64 `gorm:"default:0" json:"target_carbs"`
+	TargetFiber    float64 `gorm:"default:0" json:"target_fiber"`
 
 	MealsRemaining int       `gorm:"not null" json:"meals_remaining"`
 	ControlMode    string    `gorm:"size:20;not null" json:"control_mode"` // NORMAL, TIGHT, DAMAGE_CONTROL
@@ -240,6 +244,7 @@ type GoalMacroProfile struct {
 	DailyProteinTarget         float64   `gorm:"not null" json:"daily_protein_target"`
 	DailyFatTarget             float64   `gorm:"not null" json:"daily_fat_target"`
 	DailyCarbsTarget           float64   `gorm:"not null" json:"daily_carbs_target"`
+	DailyFiberTarget           float64   `gorm:"not null;default:0" json:"daily_fiber_target"`
 	MacroPriorityOrder         string    `gorm:"type:text" json:"macro_priority_order"` // JSON string
 	DamageControlFloorCalories int       `gorm:"default:300" json:"damage_control_floor_calories"`
 	CreatedAt                  time.Time `json:"created_at"`

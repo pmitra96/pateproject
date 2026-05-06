@@ -1,14 +1,13 @@
 package llm
 
 import (
-
 	"encoding/json"
 	"fmt"
-
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
-
 )
 
 type ToolCallFunction struct {
@@ -116,6 +115,14 @@ func (c *Client) Chat(messages []Message) (string, Usage, error) {
 
 func (c *Client) ChatWithTools(messages []Message, tools []Tool) (*Message, Usage, error) {
 	return c.provider.ChatWithTools(messages, tools)
+}
+
+func loadPromptFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // ProcessWhatsAppConversation handles a message and routes it using OpenAI tools with context
@@ -274,6 +281,81 @@ func (c *Client) ProcessWhatsAppConversation(userMessage string, imageBase64 str
 		{
 			Type: "function",
 			Function: FunctionDef{
+				Name:        "get_meal_log_time",
+				Description: "Find when a specific meal was logged. Call this when user asks 'when did I log X?' or 'what time was X logged?'.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"meal_name": map[string]any{
+							"type":        "string",
+							"description": "Name of the meal/dish to search, e.g. 'eggs'.",
+						},
+						"date": map[string]any{
+							"type":        "string",
+							"description": "Optional date in YYYY-MM-DD. If omitted, defaults to today.",
+						},
+					},
+					"required": []string{"meal_name"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: FunctionDef{
+				Name:        "get_recent_meals",
+				Description: "Get recently logged meals with timestamps. Call when user asks 'what did I log recently?' or similar.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"limit": map[string]any{
+							"type":        "integer",
+							"description": "How many recent meals to return (default 5, max 20).",
+						},
+					},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: FunctionDef{
+				Name:        "get_active_goal",
+				Description: "Get the user's current active goal and macro targets.",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: FunctionDef{
+				Name:        "get_user_profile",
+				Description: "Get the user's saved profile details (height, weight, age, gender, location).",
+				Parameters: map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: FunctionDef{
+				Name:        "get_recent_orders",
+				Description: "Get recent grocery orders and item counts.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"limit": map[string]any{
+							"type":        "integer",
+							"description": "How many recent orders to return (default 5, max 20).",
+						},
+					},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: FunctionDef{
 				Name:        "update_pantry",
 				Description: "Update the user's pantry/inventory. Call this when the user says 'Add X to my pantry', 'I finished Y', or 'I have Z kg of rice'.",
 				Parameters: map[string]any{
@@ -402,23 +484,25 @@ func (c *Client) ProcessWhatsAppConversation(userMessage string, imageBase64 str
 			Type: "function",
 			Function: FunctionDef{
 				Name:        "update_user_profile",
-				Description: "Update the user's personal profile (height, weight, age, gender). Call this when the user provides these details.",
+				Description: "Update the user's personal profile (height, weight, age, gender, activity level, timezone). Call this when the user provides these details.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"height": map[string]any{"type": "number", "description": "Height in cm (e.g. 175)."},
-						"weight": map[string]any{"type": "number", "description": "Weight in kg (e.g. 70.5)."},
-						"age":    map[string]any{"type": "integer", "description": "Age in years."},
-						"gender": map[string]any{"type": "string", "enum": []string{"male", "female", "other"}},
+						"height":         map[string]any{"type": "number", "description": "Height in cm (e.g. 175)."},
+						"weight":         map[string]any{"type": "number", "description": "Weight in kg (e.g. 70.5)."},
+						"age":            map[string]any{"type": "integer", "description": "Age in years."},
+						"gender":         map[string]any{"type": "string", "enum": []string{"male", "female", "other"}},
+						"activity_level": map[string]any{"type": "string", "enum": []string{"sedentary", "light", "moderate", "active", "very_active"}},
+						"timezone":       map[string]any{"type": "string", "description": "IANA timezone name like Asia/Kolkata or America/Los_Angeles."},
 					},
 				},
 			},
 		},
 	}
 
-	systemPrompt := Message{
-		Role: "system",
-		Content: fmt.Sprintf(`You are NIRA (Nutrition Intelligence & Response Agent).
+	basePrompt := loadPromptFile(filepath.Join("llm", "nira.md"))
+	if basePrompt == "" {
+		basePrompt = `You are NIRA (Nutrition Intelligence & Response Agent).
 Your role is to generate precise, data-driven responses for a diet control system.
 
 CORE PRINCIPLES:
@@ -427,43 +511,26 @@ CORE PRINCIPLES:
 3. BE NON-JUDGMENTAL: No praise, no guilt, no emotional language.
 4. SHOW CONSEQUENCES: Show the data-driven impact of actions.
 
-CONVERSATIONAL BEHAVIOR:
-- For greetings like "hi", "hello", "hey", "good morning", respond with a brief, friendly greeting and ask how you can help with their nutrition today. Do NOT call any tools for greetings.
-- For casual questions, small talk, or anything that is NOT about food, meals, nutrition, pantry, or goals, respond conversationally without calling any tools.
-- Only call a tool when the user explicitly wants to perform an action (log a meal, check budget, update pantry, etc.).
-
 TOOL USAGE:
 - Do NOT call a tool unless the user's message clearly maps to that tool's purpose.
-- If unsure whether to call a tool, respond conversationally and ask for clarification.
-- Never call get_daily_summary, get_leftover_budget, or any data retrieval tool just because the user said hello or asked a generic question.
+- Never output plain text like "Action: <tool_name>" or "[Action: <tool_name>]". Use structured tool calls only.`
+	}
 
-GROCERY & IMAGE HANDLING:
-If the user message is a list of raw items or ingredients (likely from a grocery receipt or a photo of a shopping bag), use update_pantry. Do NOT log these as a meal unless the user explicitly says "I ate this".
-For receipts, focus on the name and the total quantity (e.g., "500g", "2 pieces").
-
-MEAL CORRECTIONS:
-If the user corrects a specific item (e.g. 'I actually had 6 eggs', 'remove the espresso'), use modify_logged_meal with action='update', 'add', or 'delete', target_dish_name='Egg White Omelette', new_ingredients='6 eggs'. Do NOT use log_meals again for corrections.
-
-PROFILE COLLECTION:
-If the user asks for a weight-loss goal or a goal with a timeline (e.g. 'lose 5kg in 75 days') and their profile data (Height, Weight, Age, Gender) is missing from the USER CONTEXT, ask for the missing details before calculating the calorie target. Once provided, use update_user_profile to save them.
-
-RESPONSE STRUCTURE:
-1. Decision or State
-2. Immediate Impact
-3. (Optional) Forward Implication
-
-STYLE RULES:
-- Use line breaks for readability.
-- Calm, expert tone.
-- Use emojis sparingly.
-
-USER CONTEXT:
-%s
-
-CRITICAL LOGGING RULES:
-1. Always Split Dishes.
-2. Detailed Ingredients with quantities.
-3. Multi-Turn Context.`, userContext),
+	systemPrompt := Message{
+		Role: "system",
+	Content: fmt.Sprintf(
+		"You are a strict orchestration layer for WhatsApp nutrition assistance.\n"+
+			"You must follow the prompt below and you must not weaken its rules.\n\n"+
+			"Hard constraints:\n"+
+			"- Never emit raw action markers.\n"+
+			"- Prefer structured tool calls for toolable actions.\n"+
+			"- Keep replies short and user-facing.\n"+
+			"- If the file prompt conflicts with hard constraints, the hard constraints win.\n\n"+
+			"Prompt file:\n%s\n\n"+
+			"USER CONTEXT:\n%s",
+			basePrompt,
+			userContext,
+		),
 	}
 
 	messages := []Message{systemPrompt}

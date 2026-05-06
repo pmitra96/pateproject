@@ -71,6 +71,7 @@ func SetGoalMacroTargets(w http.ResponseWriter, r *http.Request) {
 		DailyProteinTarget         float64  `json:"daily_protein_target"`
 		DailyFatTarget             float64  `json:"daily_fat_target"`
 		DailyCarbsTarget           float64  `json:"daily_carbs_target"`
+		DailyFiberTarget           float64  `json:"daily_fiber_target"`
 		MacroPriority              []string `json:"macro_priority"`
 		DamageControlFloorCalories int      `json:"damage_control_floor_calories"`
 	}
@@ -88,8 +89,13 @@ func SetGoalMacroTargets(w http.ResponseWriter, r *http.Request) {
 		DailyProteinTarget:         req.DailyProteinTarget,
 		DailyFatTarget:             req.DailyFatTarget,
 		DailyCarbsTarget:           req.DailyCarbsTarget,
+		DailyFiberTarget:           req.DailyFiberTarget,
 		MacroPriorityOrder:         string(priorityJSON),
 		DamageControlFloorCalories: req.DamageControlFloorCalories,
+	}
+
+	if profile.DailyFiberTarget == 0 {
+		profile.DailyFiberTarget = services.DefaultFiberTargetFromCalories(profile.DailyCalorieTarget)
 	}
 
 	// Upsert Profile

@@ -29,7 +29,7 @@ A smart pantry management system that automatically tracks grocery orders from Z
 ┌──────▼──────┐  ┌───▼────────┐
 │   Python    │  │ PostgreSQL │
 │  Extractor  │  │  Database  │
-│  Port 8081  │  │ Port 5432  │
+│  Port 8000  │  │ Port 5432  │
 └─────────────┘  └────────────┘
 ```
 
@@ -113,10 +113,10 @@ A smart pantry management system that automatically tracks grocery orders from Z
    ```
 
    This starts all services:
-   - Backend: http://localhost:8080
-   - Python Extractor: http://localhost:8081
-   - Frontend: http://localhost:5173
-   - Database: localhost:5432
+- Backend: http://localhost:8080
+- Python Extractor: http://localhost:8000
+- Frontend: http://localhost:5173
+- Database: localhost:5432
 
 ## API Endpoints
 
@@ -209,7 +209,7 @@ make logs         # Tail backend logs
 
 ```bash
 # Test Python service directly
-curl -X POST http://localhost:8081/extract \
+curl -X POST http://localhost:8000/extract \
   -F "file=@zepto.pdf"
 
 # Test via Go backend
@@ -230,11 +230,68 @@ DB_PORT=5432
 DB_SSLMODE=disable
 
 # Services
-PYTHON_EXTRACTOR_URL=http://localhost:8081
+PYTHON_EXTRACTOR_URL=http://localhost:8000
 INGESTION_API_KEY=secret-key
 
 # OAuth (Frontend)
 VITE_GOOGLE_CLIENT_ID=your-client-id
+```
+
+## Deployment (Actual)
+
+Production deployment is handled by repository scripts under `scripts/`:
+
+- `scripts/safe-deploy.sh`: runs tests/smoke checks, then deploys
+- `scripts/deploy-gcp.sh`: deploys backend and/or frontend
+
+### Deployment Targets
+
+- **Backend**: Google Cloud Run (`pateproject-backend`, region `asia-southeast1`)
+- **Container Registry**: Artifact Registry (`pateproject-repo`)
+- **Frontend**: Firebase Hosting
+- **Secrets**: Google Secret Manager
+
+### One-Time Setup
+
+1. Install and authenticate Google Cloud CLI and Firebase CLI.
+2. Set your active GCP project:
+   ```bash
+   gcloud config set project <PROJECT_ID>
+   ```
+3. Ensure root `.env` contains all required values (DB URL, LLM keys/models, WhatsApp keys, JWT, CORS origins).
+
+### Deploy Commands
+
+```bash
+# Full safe deploy (recommended)
+bash scripts/safe-deploy.sh
+
+# Deploy backend only
+bash scripts/deploy-gcp.sh --backend
+
+# Deploy frontend only
+bash scripts/deploy-gcp.sh --frontend
+```
+
+### What `deploy-gcp.sh` Does
+
+1. Creates Artifact Registry repository if missing.
+2. Syncs `.env` secrets to Secret Manager.
+3. Builds and pushes backend image from `backend/Dockerfile.gcp`.
+4. Deploys Cloud Run service with `--set-secrets`.
+5. Builds frontend, deploys to Firebase Hosting.
+6. Updates `ALLOWED_ORIGINS` secret to include Firebase URL and refreshes Cloud Run secret binding.
+
+### Verify Deployment
+
+```bash
+# Get backend URL
+gcloud run services describe pateproject-backend \
+  --region asia-southeast1 \
+  --format='value(status.url)'
+
+# Health check
+curl <BACKEND_URL>/health
 ```
 
 ## Contributing

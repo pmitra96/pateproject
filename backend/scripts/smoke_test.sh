@@ -19,15 +19,16 @@ else
     echo "⚠️ Warning: No .env file found. Relying on existing environment variables."
 fi
 
-# Verify critical variables
-if [ -z "$GEMINI_API_KEY" ]; then
-    echo "❌ Error: GEMINI_API_KEY is not set."
+# Force OpenAI-only mode
+export LLM_PROVIDER="openai"
+if [ -z "$OPENAI_API_KEY" ]; then
+    echo "❌ Error: OPENAI_API_KEY is not set (OpenAI-only mode)."
     exit 1
 fi
 
-# Run only the smoke test in the controllers package
+# Run only the live smoke test in the tests package
 # Setting LLM_SMOKE_TEST=true activates the live API calls
-LLM_SMOKE_TEST=true go test -v -run TestWhatsAppLLMSmoke ./controllers/...
+LLM_SMOKE_TEST=true go test -v -run TestWhatsAppLLMSmoke ./tests/...
 
 RESULT=$?
 

@@ -268,7 +268,7 @@ Return ONLY a JSON object:
 	}(), item.Ingredient.Name, item.Unit)
 
 	resp, _, err := s.llmClient.Chat([]llm.Message{
-		{Role: "system", Content: fmt.Sprintf("You are a nutrition expert. Provide estimated nutritional data %s. If brand info is unavailable, use average values for the ingredient.", unitType)},
+		{Role: "system", Content: nutritionEstimatorSystemPrompt(unitType)},
 		{Role: "user", Content: prompt},
 	})
 	if err != nil {
@@ -337,6 +337,8 @@ func (s *NutritionService) EstimateNutritionFromQuery(userID uint, query string)
 		return nil, fmt.Errorf("empty query")
 	}
 
+	normalizedServing := NormalizeServingQuery(query)
+
 	// 0. Check User's Pantry First
 	if userID > 0 {
 		var pi models.PantryItem
@@ -347,7 +349,7 @@ func (s *NutritionService) EstimateNutritionFromQuery(userID uint, query string)
 				Joins("JOIN ingredients ON ingredients.id = pantry_items.ingredient_id").
 				Where("pantry_items.user_id = ? AND LOWER(ingredients.name) = ?", userID, strings.ToLower(extraction.Ingredient)).
 				First(&pi).Error
-			
+
 			if err == nil && pi.Item.Calories > 0 {
 				logger.Info("Found brand-specific match in user pantry", "user_id", userID, "ingredient", extraction.Ingredient, "item", pi.Item.Name)
 				return &FoodEstimate{
@@ -355,6 +357,7 @@ func (s *NutritionService) EstimateNutritionFromQuery(userID uint, query string)
 					Protein:  pi.Item.Protein,
 					Fat:      pi.Item.Fat,
 					Carbs:    pi.Item.Carbs,
+					Fiber:    pi.Item.Fiber,
 					Name:     pi.Item.Name,
 				}, nil
 			}
@@ -374,6 +377,7 @@ func (s *NutritionService) EstimateNutritionFromQuery(userID uint, query string)
 				Protein:  item.Protein,
 				Fat:      item.Fat,
 				Carbs:    item.Carbs,
+				Fiber:    item.Fiber,
 				Name:     item.Name,
 			}, nil
 		}
@@ -393,6 +397,10 @@ func (s *NutritionService) EstimateNutritionFromQuery(userID uint, query string)
 
 	prompt := fmt.Sprintf(`Estimate nutritional information for: "%s".
 Assume a standard serving size if quantity is not specified.
+Serving normalization:
+- normalized serving: %s
+- assumed amount: %.0f%s
+- notes: %s
 
 Return ONLY a JSON object:
 {
@@ -400,12 +408,13 @@ Return ONLY a JSON object:
   "protein": float,
   "carbs": float,
   "fat": float,
+  "fiber": float,
   "serving_size": string
-}`, query)
+}`, query, normalizedServing.AssumedServing, normalizedServing.AssumedAmount, normalizedServing.AssumedUnit, strings.Join(normalizedServing.Notes, ", "))
 
 	// Using the same client
 	resp, _, err := s.llmClient.Chat([]llm.Message{
-		{Role: "system", Content: "You are a nutrition expert. Provide estimated nutritional data. Be conservative but realistic."},
+		{Role: "system", Content: nutritionEstimatorSystemPrompt("for meal/query estimation")},
 		{Role: "user", Content: prompt},
 	})
 	if err != nil {
@@ -425,6 +434,7 @@ Return ONLY a JSON object:
 		Protein     float64 `json:"protein"`
 		Carbs       float64 `json:"carbs"`
 		Fat         float64 `json:"fat"`
+		Fiber       float64 `json:"fiber"`
 		ServingSize string  `json:"serving_size"`
 	}
 
@@ -433,11 +443,35 @@ Return ONLY a JSON object:
 		return nil, fmt.Errorf("failed to parse nutrition data")
 	}
 
+	servingSize := strings.TrimSpace(data.ServingSize)
+	if servingSize == "" {
+		servingSize = normalizedServing.AssumedServing
+	}
+
 	return &FoodEstimate{
-		Calories: data.Calories,
-		Protein:  data.Protein,
-		Fat:      data.Fat,
-		Carbs:    data.Carbs,
-		Name:     query, // or data.ServingSize + " " + query
+		Name:        query,
+		Calories:    data.Calories,
+		Protein:     data.Protein,
+		Fat:         data.Fat,
+		Carbs:       data.Carbs,
+		Fiber:       data.Fiber,
+		ServingSize: servingSize,
 	}, nil
+}
+
+func nutritionEstimatorSystemPrompt(unitType string) string {
+	base := loadNutritionEstimatorPrompt()
+	if base == "" {
+		base = `You are a precise nutrition tracking assistant.
+Your job is to estimate calories and macros for user-logged meals as accurately as possible.
+Always calculate totals for calories, protein, fat, carbs, and fiber when possible.
+Do not be overconfident when data is missing.
+Return only valid JSON.`
+	}
+
+	return fmt.Sprintf(
+		"%s\n\nYou are currently estimating nutrition %s.\nReturn only a JSON object and do not include markdown, commentary, or safety disclaimers.",
+		base,
+		unitType,
+	)
 }

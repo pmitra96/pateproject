@@ -9,6 +9,7 @@
 #   bash scripts/deploy-gcp.sh            # Deploy everything
 #   bash scripts/deploy-gcp.sh --backend  # Backend only
 #   bash scripts/deploy-gcp.sh --frontend # Frontend only
+#   bash scripts/deploy-gcp.sh --backend --build-mode cloud  # Backend with Cloud Build
 
 set -e
 
@@ -31,10 +32,45 @@ echo "================================================"
 # Parse flags
 DEPLOY_BACKEND=true
 DEPLOY_FRONTEND=true
-if [ "$1" == "--backend" ]; then
-    DEPLOY_FRONTEND=false
-elif [ "$1" == "--frontend" ]; then
-    DEPLOY_BACKEND=false
+COST_MODE="NORMAL"
+BUILD_MODE="local"
+for arg in "$@"; do
+    if [ "$arg" == "--backend" ]; then
+        DEPLOY_FRONTEND=false
+    elif [ "$arg" == "--frontend" ]; then
+        DEPLOY_BACKEND=false
+    fi
+done
+for i in "$@"; do
+    if [ "$prev" = "--cost-mode" ]; then
+        COST_MODE="$i"
+        break
+    fi
+    prev="$i"
+done
+prev=""
+for i in "$@"; do
+    if [ "$prev" = "--build-mode" ]; then
+        BUILD_MODE="$i"
+        break
+    fi
+    prev="$i"
+done
+
+if [ "$BUILD_MODE" != "local" ] && [ "$BUILD_MODE" != "cloud" ]; then
+    echo "Error: --build-mode must be either 'local' or 'cloud' (got '$BUILD_MODE')"
+    exit 1
+fi
+
+CPU="1"
+MEMORY="512Mi"
+MIN_INSTANCES="0"
+MAX_INSTANCES="10"
+CONCURRENCY="80"
+TIMEOUT="30"
+if [ "$COST_MODE" = "LOW" ]; then
+    MEMORY="256Mi"
+    MAX_INSTANCES="1"
 fi
 
 # ── Load root .env ──────────────────────────────────────────────────────────
@@ -42,6 +78,12 @@ ROOT_ENV="$(dirname "$0")/../.env"
 if [ -f "$ROOT_ENV" ]; then
     echo "Loading secrets from $ROOT_ENV..."
     export $(grep -v '^#' "$ROOT_ENV" | grep -v '^$' | xargs)
+fi
+
+# Force OpenAI-only provider for all deployments.
+LLM_PROVIDER="openai"
+if [ -z "$OPENAI_MODEL" ]; then
+    OPENAI_MODEL="gpt-4o-mini"
 fi
 
 # ── STEP 1: Ensure Artifact Registry exists ──────────────────────────────────
@@ -113,10 +155,8 @@ create_or_update_secret() {
 
 create_or_update_secret "DATABASE_URL" "$DATABASE_URL"
 create_or_update_secret "PYTHON_EXTRACTOR_URL" "$PYTHON_EXTRACTOR_URL"
-create_or_update_secret "GEMINI_API_KEY" "$GEMINI_API_KEY"
 create_or_update_secret "OPENAI_API_KEY" "$OPENAI_API_KEY"
 create_or_update_secret "LLM_PROVIDER" "$LLM_PROVIDER"
-create_or_update_secret "GEMINI_MODEL" "$GEMINI_MODEL"
 create_or_update_secret "OPENAI_MODEL" "$OPENAI_MODEL"
 create_or_update_secret "INGESTION_API_KEY" "$INGESTION_API_KEY"
 create_or_update_secret "ALLOWED_ORIGINS" "$ALLOWED_ORIGINS"
@@ -128,10 +168,14 @@ create_or_update_secret "JWT_SECRET" "$JWT_SECRET"
 # ── STEP 4: Deploy Backend ────────────────────────────────────────────────────
 if [ "$DEPLOY_BACKEND" = true ]; then
     echo ""
-    echo "▶ Building and pushing Go Backend (linux/amd64)..."
+    echo "▶ Building and pushing Go Backend (linux/amd64) [mode=$BUILD_MODE]..."
     BACKEND_IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$BACKEND_SERVICE"
-    docker build --platform linux/amd64 -t $BACKEND_IMAGE ./backend -f backend/Dockerfile.gcp
-    docker push $BACKEND_IMAGE
+    if [ "$BUILD_MODE" = "cloud" ]; then
+        $GCLOUD_PATH builds submit ./backend --tag $BACKEND_IMAGE
+    else
+        docker build --platform linux/amd64 -t $BACKEND_IMAGE ./backend -f backend/Dockerfile.gcp
+        docker push $BACKEND_IMAGE
+    fi
 
     echo "▶ Deploying Backend to Cloud Run..."
     $GCLOUD_PATH run deploy $BACKEND_SERVICE \
@@ -139,9 +183,13 @@ if [ "$DEPLOY_BACKEND" = true ]; then
         --platform managed \
         --region $REGION \
         --allow-unauthenticated \
-        --memory 512Mi \
-        --cpu 1 \
-        --set-secrets="DATABASE_URL=DATABASE_URL:latest,PYTHON_EXTRACTOR_URL=PYTHON_EXTRACTOR_URL:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,LLM_PROVIDER=LLM_PROVIDER:latest,GEMINI_MODEL=GEMINI_MODEL:latest,OPENAI_MODEL=OPENAI_MODEL:latest,INGESTION_API_KEY=INGESTION_API_KEY:latest,ALLOWED_ORIGINS=ALLOWED_ORIGINS:latest,WHATSAPP_VERIFY_TOKEN=WHATSAPP_VERIFY_TOKEN:latest,WHATSAPP_ACCESS_TOKEN=WHATSAPP_ACCESS_TOKEN:latest,WHATSAPP_PHONE_NUMBER_ID=WHATSAPP_PHONE_NUMBER_ID:latest,JWT_SECRET=JWT_SECRET:latest"
+        --memory $MEMORY \
+        --cpu $CPU \
+        --min-instances $MIN_INSTANCES \
+        --max-instances $MAX_INSTANCES \
+        --concurrency $CONCURRENCY \
+        --timeout $TIMEOUT \
+        --set-secrets="DATABASE_URL=DATABASE_URL:latest,PYTHON_EXTRACTOR_URL=PYTHON_EXTRACTOR_URL:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,LLM_PROVIDER=LLM_PROVIDER:latest,OPENAI_MODEL=OPENAI_MODEL:latest,INGESTION_API_KEY=INGESTION_API_KEY:latest,ALLOWED_ORIGINS=ALLOWED_ORIGINS:latest,WHATSAPP_VERIFY_TOKEN=WHATSAPP_VERIFY_TOKEN:latest,WHATSAPP_ACCESS_TOKEN=WHATSAPP_ACCESS_TOKEN:latest,WHATSAPP_PHONE_NUMBER_ID=WHATSAPP_PHONE_NUMBER_ID:latest,JWT_SECRET=JWT_SECRET:latest"
 
     BACKEND_URL=$($GCLOUD_PATH run services describe $BACKEND_SERVICE --platform managed --region $REGION --format='value(status.url)')
     echo "  ✅ Backend deployed: $BACKEND_URL"
