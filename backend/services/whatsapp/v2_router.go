@@ -45,11 +45,17 @@ func routeWhatsAppMessage(text string, state *models.ConversationState) RouteDec
 	if strings.Contains(lower, "what all did i eat today") || strings.Contains(lower, "what did i eat today") || strings.Contains(lower, "today's meal history") || strings.Contains(lower, "today's summary") {
 		return RouteDecision{Intent: "daily_summary", ToolName: "get_daily_summary", Args: map[string]interface{}{}}
 	}
+	if strings.Contains(lower, "give me today's meals") || strings.Contains(lower, "what is my meals for today") || strings.Contains(lower, "meal history") || strings.Contains(lower, "show my meals") || strings.Contains(lower, "give my meal history") {
+		return RouteDecision{Intent: "daily_summary", ToolName: "get_daily_summary", Args: map[string]interface{}{}}
+	}
 	if strings.Contains(lower, "what's my budget") || strings.Contains(lower, "what is my budget") || strings.Contains(lower, "how many calories do i have left") {
 		return RouteDecision{Intent: "budget", ToolName: "get_leftover_budget", Args: map[string]interface{}{}}
 	}
 	if strings.Contains(lower, "clear all my meals") || strings.Contains(lower, "delete all my meals") || strings.Contains(lower, "clear my day") {
 		return RouteDecision{Intent: "clear_day", ToolName: "clear_all_meals_today", Args: map[string]interface{}{}}
+	}
+	if deterministic, ok := parseDeterministicCRUD(text); ok {
+		return deterministic
 	}
 
 	return RouteDecision{Intent: "llm", NeedsLLM: true}
