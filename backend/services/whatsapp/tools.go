@@ -27,6 +27,7 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 		dishName, _ := mealData["dish_name"].(string)
 		ingredients, _ := mealData["ingredients"].(string)
 		mealType, _ := mealData["meal_type"].(string)
+		dishName = canonicalDishName(dishName, mealType, ingredients)
 
 		estimated, err := ns.EstimateNutritionFromQuery(s.User.ID, ingredients)
 		if err != nil || estimated == nil {

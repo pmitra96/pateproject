@@ -1,3 +1,6 @@
+//go:build tools
+// +build tools
+
 package main
 
 import (
@@ -13,7 +16,7 @@ func main() {
 	var count int64
 	database.DB.Model(&models.PantryItem{}).Count(&count)
 	fmt.Printf("Total Pantry Items: %d\n", count)
-	
+
 	var items []models.PantryItem
 	database.DB.Preload("Ingredient").Find(&items)
 	for _, it := range items {

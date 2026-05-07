@@ -80,9 +80,9 @@ func recentDuplicateMeal(userID uint, mealType, dishName, ingredients string, no
 
 func ambiguousMealsPayload(meals []models.MealLog, reason string) map[string]any {
 	options := make([]map[string]any, 0, len(meals))
-	for _, meal := range meals {
+	for i, meal := range meals {
 		options = append(options, map[string]any{
-			"meal_id":   meal.ID,
+			"index":     i,
 			"dish_name": meal.Name,
 			"meal_type": meal.MealType,
 			"logged_at": meal.LoggedAt.Format(time.RFC3339),
@@ -91,7 +91,7 @@ func ambiguousMealsPayload(meals []models.MealLog, reason string) map[string]any
 	return map[string]any{
 		"ok":      false,
 		"error":   reason,
-		"message": "Multiple matching meals found. Please specify which one to update/delete.",
+		"message": "Multiple matching meals found. Reply with the option number (starting from 0).",
 		"options": options,
 	}
 }

@@ -1,16 +1,19 @@
+//go:build tools
+// +build tools
+
 package main
 
 import (
 	"encoding/base64"
 	"fmt"
-	"os"
 	"github.com/pmitra96/pateproject/llm"
+	"os"
 )
 
 func main() {
 	// Load env
 	os.Setenv("LLM_MODEL", "gpt-4o-mini")
-	
+
 	imagePath := "/Users/pushya/Documents/pushya_projects/pateproject/backend/tests/1000174823.jpg"
 	imageBytes, err := os.ReadFile(imagePath)
 	if err != nil {
@@ -19,7 +22,7 @@ func main() {
 	}
 
 	client := llm.NewClient()
-	
+
 	fmt.Println("--- STEP 1: Vision Analysis ---")
 	analysis, err := client.AnalyzeMealImage(base64.StdEncoding.EncodeToString(imageBytes))
 	if err != nil {
@@ -36,7 +39,7 @@ func main() {
 		fmt.Printf("NIRA Error: %v\n", err)
 		return
 	}
-	
+
 	fmt.Printf("NIRA Response: %s\n", response)
 	fmt.Printf("Usage: %+v\n", usage)
 }

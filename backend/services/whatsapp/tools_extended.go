@@ -43,8 +43,28 @@ func HandleGetDailySummary(s *Session, args map[string]interface{}) (string, err
 
 	var totalCal, totalPro, totalCarb, totalFat, totalFiber float64
 	var lines []string
+	sections := map[string][]string{
+		"Breakfast": {},
+		"Lunch":     {},
+		"Snack":     {},
+		"Dinner":    {},
+	}
+	sectionTotals := map[string]map[string]float64{
+		"Breakfast": {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "fiber": 0},
+		"Lunch":     {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "fiber": 0},
+		"Snack":     {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "fiber": 0},
+		"Dinner":    {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "fiber": 0},
+	}
 	for _, m := range meals {
-		lines = append(lines, fmt.Sprintf("- %s (%s, %s): %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg", m.Name, m.MealType, userReadableTime(s.User.ID, m.LoggedAt), m.Calories, m.Protein, m.Carbs, m.Fat, m.Fiber))
+		line := fmt.Sprintf("- %s (%s): %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg", m.Name, userReadableTime(s.User.ID, m.LoggedAt), m.Calories, m.Protein, m.Carbs, m.Fat, m.Fiber)
+		lines = append(lines, line)
+		section := normalizeMealTypeForSummary(m.MealType)
+		sections[section] = append(sections[section], line)
+		sectionTotals[section]["calories"] += m.Calories
+		sectionTotals[section]["protein"] += m.Protein
+		sectionTotals[section]["carbs"] += m.Carbs
+		sectionTotals[section]["fat"] += m.Fat
+		sectionTotals[section]["fiber"] += m.Fiber
 		totalCal += m.Calories
 		totalPro += m.Protein
 		totalCarb += m.Carbs
@@ -54,15 +74,49 @@ func HandleGetDailySummary(s *Session, args map[string]interface{}) (string, err
 
 	state, _ := services.ComputeRemainingDayState(s.User.ID, time.Now())
 	remaining := ""
+	budgetFeedback := "Good progress. Keep balancing your remaining meals."
 	if state != nil {
 		remaining = fmt.Sprintf("\n\n*Remaining:* %.0f kcal, %.1fg protein, %.1fg carbs, %.1fg fat, %.1fg fiber", state.RemainingCalories, state.RemainingProtein, state.RemainingCarbs, state.RemainingFat, state.RemainingFiber)
+		consumed := state.TargetCalories - state.RemainingCalories
+		breakfastAndLunch := sectionTotals["Breakfast"]["calories"] + sectionTotals["Lunch"]["calories"]
+		if state.RemainingCalories < 0 {
+			budgetFeedback = "You have exceeded your daily budget. Tomorrow, try reducing calorie-dense items earlier in the day and keep dinner lighter."
+		} else if state.TargetCalories > 0 && breakfastAndLunch >= (0.85*state.TargetCalories) {
+			budgetFeedback = "You used most of your budget by breakfast/lunch. Keep dinner lighter with high-protein, low-fat options."
+		} else if state.TargetCalories > 0 && consumed >= (0.7*state.TargetCalories) {
+			budgetFeedback = "You are close to your budget already. Keep the remaining meals lighter and protein-focused."
+		} else {
+			budgetFeedback = "Good pacing so far. You still have room for later meals if portions stay controlled."
+		}
 	}
 
 	return jsonString(map[string]any{
 		"ok": true, "count": len(meals), "lines": lines,
-		"totals":         map[string]any{"calories": totalCal, "protein": totalPro, "carbs": totalCarb, "fat": totalFat, "fiber": totalFiber},
-		"remaining_text": strings.TrimSpace(remaining),
+		"sections": map[string]any{
+			"breakfast": map[string]any{"meals": sections["Breakfast"], "totals": sectionTotals["Breakfast"]},
+			"lunch":     map[string]any{"meals": sections["Lunch"], "totals": sectionTotals["Lunch"]},
+			"snack":     map[string]any{"meals": sections["Snack"], "totals": sectionTotals["Snack"]},
+			"dinner":    map[string]any{"meals": sections["Dinner"], "totals": sectionTotals["Dinner"]},
+		},
+		"totals":          map[string]any{"calories": totalCal, "protein": totalPro, "carbs": totalCarb, "fat": totalFat, "fiber": totalFiber},
+		"remaining_text":  strings.TrimSpace(remaining),
+		"budget_feedback": budgetFeedback,
 	}), nil
+}
+
+func normalizeMealTypeForSummary(mealType string) string {
+	switch strings.ToLower(strings.TrimSpace(mealType)) {
+	case "breakfast":
+		return "Breakfast"
+	case "lunch":
+		return "Lunch"
+	case "snack":
+		return "Snack"
+	case "dinner":
+		return "Dinner"
+	default:
+		return "Snack"
+	}
 }
 
 // HandleModifyMeal handles corrections to previously logged meals
@@ -160,9 +214,7 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 			return `{"ok":false,"error":"new_ingredients_required"}`, nil
 		}
 		dishName := targetDish
-		if dishName == "" {
-			dishName = newIngredients
-		}
+		dishName = canonicalDishName(dishName, mealType, newIngredients)
 		estimated, err := ns.EstimateNutritionFromQuery(s.User.ID, newIngredients)
 		if err != nil || estimated == nil {
 			return `{"ok":false,"error":"nutrition_estimation_failed"}`, nil

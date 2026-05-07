@@ -159,15 +159,21 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 				if synthetic.Function.Name == "get_daily_summary" {
 					if deterministic := deterministicToolReply(result); deterministic != "" && deterministic != "Done." {
 						o.replySafe(s, deterministic)
+						updateConversationStateAfterTool(state, "llm", synthetic.Function.Name, resp)
+						o.appendAssistantMessage(s.User.ID, deterministic)
 						return
 					}
 				}
 				if finalReply := o.composeFinalReplyFromToolResults(llmClient, text, result); finalReply != "" {
 					o.replySafe(s, finalReply)
+					updateConversationStateAfterTool(state, "llm", synthetic.Function.Name, resp)
+					o.appendAssistantMessage(s.User.ID, finalReply)
 					return
 				}
 				if resp != "" {
 					o.replySafe(s, resp)
+					updateConversationStateAfterTool(state, "llm", synthetic.Function.Name, resp)
+					o.appendAssistantMessage(s.User.ID, resp)
 					return
 				}
 			}
@@ -179,14 +185,20 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 				if inferred.Function.Name == "get_daily_summary" {
 					if deterministic := deterministicToolReply(result); deterministic != "" && deterministic != "Done." {
 						o.replySafe(s, deterministic)
+						updateConversationStateAfterTool(state, "llm", inferred.Function.Name, resp)
+						o.appendAssistantMessage(s.User.ID, deterministic)
 						return
 					}
 				}
 				if finalReply := o.composeFinalReplyFromToolResults(llmClient, text, result); finalReply != "" {
 					o.replySafe(s, finalReply)
+					updateConversationStateAfterTool(state, "llm", inferred.Function.Name, resp)
+					o.appendAssistantMessage(s.User.ID, finalReply)
 					return
 				}
 				o.replySafe(s, resp)
+				updateConversationStateAfterTool(state, "llm", inferred.Function.Name, resp)
+				o.appendAssistantMessage(s.User.ID, resp)
 				return
 			}
 		}
@@ -199,14 +211,20 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 		} else {
 			s.Logger.Info("Reply mode", "type", "direct_llm")
 			o.replySafe(s, content)
+			updateConversationStateAfterReply(state, "llm", content)
 		}
 		return
 	}
 
 	// 9. Handle Tool Calls
+	uniqueToolCalls, skippedDuplicates := dedupeToolCalls(assistantMsg.ToolCalls)
+	if skippedDuplicates > 0 {
+		s.Logger.Info("Skipped duplicate tool calls", "duplicates", skippedDuplicates, "requested", len(assistantMsg.ToolCalls), "executing", len(uniqueToolCalls))
+	}
+
 	var toolResponses []string
 	var toolResults []toolExecutionResult
-	for _, tc := range assistantMsg.ToolCalls {
+	for _, tc := range uniqueToolCalls {
 		resp, err := o.Registry.Execute(s, tc)
 		if err != nil {
 			s.Logger.Warn("Tool Execution Error", "tool", tc.Function.Name, "error", err)
@@ -235,10 +253,21 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 		}
 	}
 
+	// Prefer deterministic human-readable rendering for known structured tool outputs.
+	if len(toolResults) > 0 {
+		if deterministic := deterministicToolReply(toolResults); deterministic != "" && deterministic != "Done." {
+			o.replySafe(s, deterministic)
+			updateConversationStateAfterTool(state, "llm", firstToolName(toolResults), marshalToolResults(toolResults))
+			o.appendAssistantMessage(s.User.ID, deterministic)
+			return
+		}
+	}
+
 	if len(toolResults) > 0 && shouldUseSecondPass(toolResults) {
 		if toolExecuted(toolResults, "get_daily_summary") {
 			if deterministic := deterministicToolReply(toolResults); deterministic != "" && deterministic != "Done." {
 				o.replySafe(s, deterministic)
+				o.appendAssistantMessage(s.User.ID, deterministic)
 				return
 			}
 		}
@@ -246,6 +275,8 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 		if finalReply != "" {
 			s.Logger.Info("Reply mode", "type", "tool_second_pass", "tool_count", len(toolResults))
 			o.replySafe(s, finalReply)
+			updateConversationStateAfterTool(state, "llm", firstToolName(toolResults), marshalToolResults(toolResults))
+			o.appendAssistantMessage(s.User.ID, finalReply)
 			return
 		}
 	}
@@ -255,7 +286,10 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 		return
 	}
 	s.Logger.Info("Reply mode", "type", "tool_raw", "tool_count", len(toolResponses))
-	o.replySafe(s, strings.Join(toolResponses, "\n\n"))
+	finalRaw := strings.Join(toolResponses, "\n\n")
+	o.replySafe(s, finalRaw)
+	updateConversationStateAfterTool(state, "llm", firstToolName(toolResults), marshalToolResults(toolResults))
+	o.appendAssistantMessage(s.User.ID, finalRaw)
 }
 
 func (o *Orchestrator) tryHeuristicFallback(s *Session, text string) string {
@@ -493,29 +527,84 @@ func deterministicToolReply(results []toolExecutionResult) string {
 			if getCount(m["count"]) == 0 {
 				return "No meals logged yet today."
 			}
-			if lines, ok := m["lines"].([]any); ok {
-				out := "Today's summary:\n"
-				max := len(lines)
-				if max > 6 {
-					max = 6
-				}
-				for i := 0; i < max; i++ {
-					if s, ok := lines[i].(string); ok {
-						out += "- " + s + "\n"
+			out := "Today's summary:\n"
+			if sections, ok := m["sections"].(map[string]any); ok {
+				order := []string{"breakfast", "lunch", "snack", "dinner"}
+				for _, key := range order {
+					sectionAny, exists := sections[key]
+					if !exists {
+						continue
 					}
+					sectionMap, _ := sectionAny.(map[string]any)
+					mealsAny, _ := sectionMap["meals"].([]any)
+					totalsMap, _ := sectionMap["totals"].(map[string]any)
+					out += fmt.Sprintf("\n%s:\n", strings.Title(key))
+					if len(mealsAny) == 0 {
+						out += "- No meals logged.\n"
+					} else {
+						for _, item := range mealsAny {
+							if s, ok := item.(string); ok {
+								out += s + "\n"
+							}
+						}
+					}
+					cal := getFloat(totalsMap["calories"])
+					pro := getFloat(totalsMap["protein"])
+					carbs := getFloat(totalsMap["carbs"])
+					fat := getFloat(totalsMap["fat"])
+					fiber := getFloat(totalsMap["fiber"])
+					out += fmt.Sprintf("Total %s: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg\n", strings.Title(key), cal, pro, carbs, fat, fiber)
 				}
-				if totals, ok := m["totals"].(map[string]any); ok {
-					cal := getFloat(totals["calories"])
-					pro := getFloat(totals["protein"])
-					carbs := getFloat(totals["carbs"])
-					fat := getFloat(totals["fat"])
-					fiber := getFloat(totals["fiber"])
-					if cal > 0 || pro > 0 || carbs > 0 || fat > 0 || fiber > 0 {
-						out += fmt.Sprintf("Total: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg", cal, pro, carbs, fat, fiber)
+			}
+			if totals, ok := m["totals"].(map[string]any); ok {
+				cal := getFloat(totals["calories"])
+				pro := getFloat(totals["protein"])
+				carbs := getFloat(totals["carbs"])
+				fat := getFloat(totals["fat"])
+				fiber := getFloat(totals["fiber"])
+				out += fmt.Sprintf("\nFinal Total: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg\n", cal, pro, carbs, fat, fiber)
+			}
+			if remaining, ok := m["remaining_text"].(string); ok && strings.TrimSpace(remaining) != "" {
+				out += remaining + "\n"
+			}
+			if feedback, ok := m["budget_feedback"].(string); ok && strings.TrimSpace(feedback) != "" {
+				out += "Feedback: " + strings.TrimSpace(feedback)
+			}
+			return strings.TrimSpace(out)
+		}
+	case "modify_logged_meal":
+		if m, ok := r.Response.(map[string]any); ok {
+			if errType, _ := m["error"].(string); errType == "ambiguous_target" {
+				out := "I found multiple matching meals. Reply with the option number:\n"
+				if options, ok := m["options"].([]any); ok {
+					for _, opt := range options {
+						option, _ := opt.(map[string]any)
+						idx := int(getFloat(option["index"]))
+						dish, _ := option["dish_name"].(string)
+						mealType, _ := option["meal_type"].(string)
+						loggedAt, _ := option["logged_at"].(string)
+						out += fmt.Sprintf("%d. %s (%s, %s)\n", idx, dish, mealType, loggedAt)
 					}
 				}
 				return strings.TrimSpace(out)
 			}
+			if msg, _ := m["message"].(string); strings.TrimSpace(msg) != "" {
+				return strings.TrimSpace(msg)
+			}
+		}
+	case "get_leftover_budget":
+		if m, ok := r.Response.(map[string]any); ok {
+			remaining, _ := m["remaining"].(map[string]any)
+			cal := getFloat(remaining["calories"])
+			pro := getFloat(remaining["protein"])
+			carbs := getFloat(remaining["carbs"])
+			fat := getFloat(remaining["fat"])
+			fiber := getFloat(remaining["fiber"])
+			mode, _ := remaining["mode"].(string)
+			if strings.TrimSpace(mode) == "" {
+				mode = "NORMAL"
+			}
+			return fmt.Sprintf("Remaining today: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg. Mode: %s.", cal, pro, carbs, fat, fiber, mode)
 		}
 	}
 	return "Done."
@@ -605,6 +694,30 @@ func (o *Orchestrator) appendConversationTurn(userID uint, userText, assistantTe
 	})
 }
 
+func (o *Orchestrator) appendAssistantMessage(userID uint, assistantText string) {
+	database.DB.Transaction(func(tx *gorm.DB) error {
+		if strings.TrimSpace(assistantText) == "" {
+			return nil
+		}
+		var conv models.Conversation
+		tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", userID).First(&conv)
+
+		var history []llm.Message
+		if conv.Messages != "" {
+			_ = json.Unmarshal([]byte(conv.Messages), &history)
+		}
+		history = append(history, llm.Message{Role: "assistant", Content: assistantText})
+		if len(history) > config.GetWhatsAppHistoryWindow() {
+			history = history[len(history)-config.GetWhatsAppHistoryWindow():]
+		}
+		raw, _ := json.Marshal(history)
+		if conv.ID == 0 {
+			return tx.Create(&models.Conversation{UserID: userID, Messages: string(raw)}).Error
+		}
+		return tx.Model(&conv).Update("messages", string(raw)).Error
+	})
+}
+
 func compactHistoryForLLM(history []llm.Message, max int) []llm.Message {
 	if max <= 0 || len(history) <= max {
 		return history
@@ -655,6 +768,11 @@ func (o *Orchestrator) tryResolvePendingMealSelection(s *Session, st *models.Con
 
 func resolveMealChoiceFromText(text string, ids []uint) (uint, bool) {
 	lower := strings.ToLower(strings.TrimSpace(text))
+	if n, err := strconv.Atoi(lower); err == nil {
+		if n >= 0 && n < len(ids) {
+			return ids[n], true
+		}
+	}
 	if lower == "first" || strings.Contains(lower, "first one") || lower == "1" {
 		return ids[0], true
 	}
@@ -667,7 +785,7 @@ func resolveMealChoiceFromText(text string, ids []uint) (uint, bool) {
 		return ids[len(ids)-1], true
 	}
 	for i := range ids {
-		n := i + 1
+		n := i
 		if strings.Contains(lower, strconv.Itoa(n)) {
 			return ids[i], true
 		}
@@ -687,6 +805,63 @@ func toolExecuted(results []toolExecutionResult, toolName string) bool {
 		}
 	}
 	return false
+}
+
+func dedupeToolCalls(calls []llm.ToolCall) ([]llm.ToolCall, int) {
+	if len(calls) <= 1 {
+		return calls, 0
+	}
+	seen := make(map[string]struct{}, len(calls))
+	unique := make([]llm.ToolCall, 0, len(calls))
+	dups := 0
+	for _, tc := range calls {
+		sig := toolCallSignature(tc)
+		if _, ok := seen[sig]; ok {
+			dups++
+			continue
+		}
+		seen[sig] = struct{}{}
+		unique = append(unique, tc)
+	}
+	return unique, dups
+}
+
+func toolCallSignature(tc llm.ToolCall) string {
+	return strings.ToLower(strings.TrimSpace(tc.Function.Name)) + "|" + canonicalToolArguments(tc.Function.Arguments)
+}
+
+func canonicalToolArguments(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "{}"
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		return trimmed
+	}
+	normalized, err := json.Marshal(parsed)
+	if err != nil {
+		return trimmed
+	}
+	return string(normalized)
+}
+
+func firstToolName(results []toolExecutionResult) string {
+	if len(results) == 0 {
+		return ""
+	}
+	return results[0].ToolName
+}
+
+func marshalToolResults(results []toolExecutionResult) string {
+	if len(results) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(results)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 func (o *Orchestrator) ensureGoalSetFromProfile(s *Session) (string, bool) {

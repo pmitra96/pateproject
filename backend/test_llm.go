@@ -1,9 +1,12 @@
+//go:build tools
+// +build tools
+
 package main
 
 import (
 	"fmt"
-	"github.com/pmitra96/pateproject/llm"
 	"github.com/joho/godotenv"
+	"github.com/pmitra96/pateproject/llm"
 )
 
 func main() {

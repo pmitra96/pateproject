@@ -1,3 +1,6 @@
+//go:build tools
+// +build tools
+
 package main
 
 import (
@@ -26,7 +29,7 @@ func main() {
 
 	fmt.Println("--- TEST 1: Webhook Deduplication ---")
 	msgID := "wamid.Test12345"
-	
+
 	// First arrival
 	err1 := db.Create(&models.ProcessedWebhook{MessageID: msgID}).Error
 	if err1 == nil {
@@ -44,7 +47,7 @@ func main() {
 	}
 
 	fmt.Println("\n--- TEST 2: Partial Meal Update (modify_logged_meal) ---")
-	
+
 	// Log initial meal
 	initialMeal := models.MealLog{
 		UserID:      user.ID,
@@ -65,7 +68,7 @@ func main() {
 
 	var meal models.MealLog
 	err = db.Where("user_id = ? AND meal_type = ? AND DATE(logged_at) = DATE(?) AND name ILIKE ?", user.ID, "Breakfast", today, "%"+targetDishName+"%").First(&meal).Error
-	
+
 	// Since we are using SQLite, DATE() might work differently, but we'll try it.
 	// For testing on SQLite, we might need simple string match
 	if err != nil {

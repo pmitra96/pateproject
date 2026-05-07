@@ -1,3 +1,6 @@
+//go:build tools
+// +build tools
+
 package main
 
 import (
@@ -14,7 +17,7 @@ func main() {
 
 	var identity models.UserIdentity
 	database.DB.Where("external_id = ?", "915555555555").First(&identity)
-	
+
 	fmt.Printf("Test User ID: %d\n", identity.UserID)
 
 	var meals []models.MealLog
