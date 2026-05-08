@@ -34,6 +34,7 @@ DEPLOY_BACKEND=true
 DEPLOY_FRONTEND=true
 COST_MODE="NORMAL"
 BUILD_MODE="local"
+SECRET_MODE_ARG=""
 for arg in "$@"; do
     if [ "$arg" == "--backend" ]; then
         DEPLOY_FRONTEND=false
@@ -41,6 +42,7 @@ for arg in "$@"; do
         DEPLOY_BACKEND=false
     fi
 done
+prev=""
 for i in "$@"; do
     if [ "$prev" = "--cost-mode" ]; then
         COST_MODE="$i"
@@ -56,10 +58,25 @@ for i in "$@"; do
     fi
     prev="$i"
 done
+prev=""
+for i in "$@"; do
+    if [ "$prev" = "--secret-mode" ]; then
+        SECRET_MODE_ARG="$i"
+        break
+    fi
+    prev="$i"
+done
 
 if [ "$BUILD_MODE" != "local" ] && [ "$BUILD_MODE" != "cloud" ]; then
     echo "Error: --build-mode must be either 'local' or 'cloud' (got '$BUILD_MODE')"
     exit 1
+fi
+if [ -n "$SECRET_MODE_ARG" ] && [ "$SECRET_MODE_ARG" != "env" ]; then
+    echo "Error: Secret Manager mode has been removed. Use env-only deployment."
+    exit 1
+fi
+if [ "$SECRET_MODE_ARG" = "env" ]; then
+    echo "Note: --secret-mode env is now default and the only supported mode."
 fi
 
 CPU="1"
@@ -85,6 +102,34 @@ LLM_PROVIDER="openai"
 if [ -z "$OPENAI_MODEL" ]; then
     OPENAI_MODEL="gpt-4o-mini"
 fi
+
+build_env_yaml() {
+    local env_file=$1
+    python3 - "$env_file" <<'PY'
+import os, sys
+path = sys.argv[1]
+keys = [
+  "DATABASE_URL",
+  "PYTHON_EXTRACTOR_URL",
+  "OPENAI_API_KEY",
+  "LLM_PROVIDER",
+  "OPENAI_MODEL",
+  "INGESTION_API_KEY",
+  "ALLOWED_ORIGINS",
+  "WHATSAPP_VERIFY_TOKEN",
+  "WHATSAPP_ACCESS_TOKEN",
+  "WHATSAPP_PHONE_NUMBER_ID",
+  "JWT_SECRET",
+]
+with open(path, "w", encoding="utf-8") as f:
+    for k in keys:
+        v = os.environ.get(k, "")
+        if v is None:
+            v = ""
+        v = v.replace("'", "''")
+        f.write(f"{k}: '{v}'\n")
+PY
+}
 
 # ── STEP 1: Ensure Artifact Registry exists ──────────────────────────────────
 if ! $GCLOUD_PATH artifacts repositories describe $REPOSITORY --location=$REGION >/dev/null 2>&1; then
@@ -131,39 +176,9 @@ with open(config_path, 'w') as f:
 "
 echo "  ✅ Docker authenticated"
 
-# ── STEP 3: Ensure GCP Secrets exist ─────────────────────────────────────────
+# ── STEP 3: Secret handling ──────────────────────────────────────────────────
 echo ""
-echo "▶ Syncing secrets to GCP Secret Manager..."
-
-create_or_update_secret() {
-    local SECRET_NAME=$1
-    local SECRET_VALUE=$2
-
-    if [ -z "$SECRET_VALUE" ]; then
-        echo "  ⚠️  Skipping $SECRET_NAME (not set in .env)"
-        return
-    fi
-
-    if $GCLOUD_PATH secrets describe "$SECRET_NAME" >/dev/null 2>&1; then
-        echo "  ↻  Updating secret: $SECRET_NAME"
-        echo -n "$SECRET_VALUE" | $GCLOUD_PATH secrets versions add "$SECRET_NAME" --data-file=-
-    else
-        echo "  +  Creating secret: $SECRET_NAME"
-        echo -n "$SECRET_VALUE" | $GCLOUD_PATH secrets create "$SECRET_NAME" --data-file=-
-    fi
-}
-
-create_or_update_secret "DATABASE_URL" "$DATABASE_URL"
-create_or_update_secret "PYTHON_EXTRACTOR_URL" "$PYTHON_EXTRACTOR_URL"
-create_or_update_secret "OPENAI_API_KEY" "$OPENAI_API_KEY"
-create_or_update_secret "LLM_PROVIDER" "$LLM_PROVIDER"
-create_or_update_secret "OPENAI_MODEL" "$OPENAI_MODEL"
-create_or_update_secret "INGESTION_API_KEY" "$INGESTION_API_KEY"
-create_or_update_secret "ALLOWED_ORIGINS" "$ALLOWED_ORIGINS"
-create_or_update_secret "WHATSAPP_VERIFY_TOKEN" "$WHATSAPP_VERIFY_TOKEN"
-create_or_update_secret "WHATSAPP_ACCESS_TOKEN" "$WHATSAPP_ACCESS_TOKEN"
-create_or_update_secret "WHATSAPP_PHONE_NUMBER_ID" "$WHATSAPP_PHONE_NUMBER_ID"
-create_or_update_secret "JWT_SECRET" "$JWT_SECRET"
+echo "▶ Secret mode: env-only (Secret Manager disabled)"
 
 # ── STEP 4: Deploy Backend ────────────────────────────────────────────────────
 if [ "$DEPLOY_BACKEND" = true ]; then
@@ -178,6 +193,12 @@ if [ "$DEPLOY_BACKEND" = true ]; then
     fi
 
     echo "▶ Deploying Backend to Cloud Run..."
+    echo "  Clearing existing secret-based env bindings (if any)..."
+    $GCLOUD_PATH run services update $BACKEND_SERVICE \
+        --region $REGION \
+        --clear-secrets >/dev/null 2>&1 || true
+    ENV_YAML=$(mktemp)
+    build_env_yaml "$ENV_YAML"
     $GCLOUD_PATH run deploy $BACKEND_SERVICE \
         --image $BACKEND_IMAGE \
         --platform managed \
@@ -189,7 +210,8 @@ if [ "$DEPLOY_BACKEND" = true ]; then
         --max-instances $MAX_INSTANCES \
         --concurrency $CONCURRENCY \
         --timeout $TIMEOUT \
-        --set-secrets="DATABASE_URL=DATABASE_URL:latest,PYTHON_EXTRACTOR_URL=PYTHON_EXTRACTOR_URL:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,LLM_PROVIDER=LLM_PROVIDER:latest,OPENAI_MODEL=OPENAI_MODEL:latest,INGESTION_API_KEY=INGESTION_API_KEY:latest,ALLOWED_ORIGINS=ALLOWED_ORIGINS:latest,WHATSAPP_VERIFY_TOKEN=WHATSAPP_VERIFY_TOKEN:latest,WHATSAPP_ACCESS_TOKEN=WHATSAPP_ACCESS_TOKEN:latest,WHATSAPP_PHONE_NUMBER_ID=WHATSAPP_PHONE_NUMBER_ID:latest,JWT_SECRET=JWT_SECRET:latest"
+        --env-vars-file "$ENV_YAML"
+    rm -f "$ENV_YAML"
 
     BACKEND_URL=$($GCLOUD_PATH run services describe $BACKEND_SERVICE --platform managed --region $REGION --format='value(status.url)')
     echo "  ✅ Backend deployed: $BACKEND_URL"
@@ -256,10 +278,9 @@ EOF
     echo ""
     echo "  Updating ALLOWED_ORIGINS to include Firebase URL..."
     UPDATED_ORIGINS="${ALLOWED_ORIGINS:+$ALLOWED_ORIGINS,}$HOSTING_URL"
-    echo -n "$UPDATED_ORIGINS" | $GCLOUD_PATH secrets versions add "ALLOWED_ORIGINS" --data-file=-
     $GCLOUD_PATH run services update $BACKEND_SERVICE \
         --region $REGION \
-        --update-secrets="ALLOWED_ORIGINS=ALLOWED_ORIGINS:latest"
+        --update-env-vars="^:^ALLOWED_ORIGINS=$UPDATED_ORIGINS"
     echo "  ✅ CORS updated."
 fi
 

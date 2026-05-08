@@ -64,6 +64,69 @@ func TestParseDeterministicCRUD_UpdateMealQuantityPhrase(t *testing.T) {
 	}
 }
 
+func TestParseDeterministicCRUD_UpdateMealQuantityPhraseCaseInsensitive(t *testing.T) {
+	msg := "Curd Rice IS ACTUALLY 50gm"
+	decision, ok := parseDeterministicCRUD(msg)
+	if !ok {
+		t.Fatalf("expected deterministic parse")
+	}
+	if decision.ToolName != "modify_logged_meal" {
+		t.Fatalf("expected modify_logged_meal, got %q", decision.ToolName)
+	}
+	if decision.Args["action"] != "update" {
+		t.Fatalf("expected update action, got %#v", decision.Args["action"])
+	}
+	if decision.Args["target_dish_name"] != "Curd Rice" {
+		t.Fatalf("unexpected target dish %#v", decision.Args["target_dish_name"])
+	}
+	newIngredients, _ := decision.Args["new_ingredients"].(string)
+	if newIngredients != "50gm of Curd Rice" {
+		t.Fatalf("unexpected new_ingredients %q", newIngredients)
+	}
+}
+
+func TestParseDeterministicCRUD_UpdateMealNoItIsPhrase(t *testing.T) {
+	msg := "no it is 30g of whey protein"
+	decision, ok := parseDeterministicCRUD(msg)
+	if !ok {
+		t.Fatalf("expected deterministic parse")
+	}
+	if decision.ToolName != "modify_logged_meal" {
+		t.Fatalf("expected modify_logged_meal, got %q", decision.ToolName)
+	}
+	if decision.Args["action"] != "update" {
+		t.Fatalf("expected update action, got %#v", decision.Args["action"])
+	}
+	if decision.Args["target_dish_name"] != "whey protein" {
+		t.Fatalf("unexpected target dish %#v", decision.Args["target_dish_name"])
+	}
+	newIngredients, _ := decision.Args["new_ingredients"].(string)
+	if newIngredients != "30g of whey protein" {
+		t.Fatalf("unexpected new_ingredients %q", newIngredients)
+	}
+}
+
+func TestParseDeterministicCRUD_UpdateMealShouldBePhrase(t *testing.T) {
+	msg := "it should be 30g of whey protein"
+	decision, ok := parseDeterministicCRUD(msg)
+	if !ok {
+		t.Fatalf("expected deterministic parse")
+	}
+	if decision.ToolName != "modify_logged_meal" {
+		t.Fatalf("expected modify_logged_meal, got %q", decision.ToolName)
+	}
+	if decision.Args["action"] != "update" {
+		t.Fatalf("expected update action, got %#v", decision.Args["action"])
+	}
+	if decision.Args["target_dish_name"] != "whey protein" {
+		t.Fatalf("unexpected target dish %#v", decision.Args["target_dish_name"])
+	}
+	newIngredients, _ := decision.Args["new_ingredients"].(string)
+	if newIngredients != "30g of whey protein" {
+		t.Fatalf("unexpected new_ingredients %q", newIngredients)
+	}
+}
+
 func TestParseDeterministicCRUD_SkipsPantryMessage(t *testing.T) {
 	msg := "add 1kg rice to pantry"
 	_, ok := parseDeterministicCRUD(msg)

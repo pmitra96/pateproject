@@ -35,40 +35,11 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 			continue
 		}
 
-		now := time.Now()
+		now := nowForUser(s.User.ID)
 		preState, _ := services.ComputeRemainingDayState(s.User.ID, now)
 		controlMode := "NORMAL"
 		if preState != nil {
 			controlMode = preState.ControlMode
-		}
-
-		if existing, err := recentDuplicateMeal(s.User.ID, mealType, dishName, ingredients, now); err == nil && existing != nil {
-			database.DB.Model(&models.MealLog{}).Where("id = ?", existing.ID).Updates(map[string]any{
-				"calories":    estimated.Calories,
-				"protein":     estimated.Protein,
-				"carbs":       estimated.Carbs,
-				"fat":         estimated.Fat,
-				"fiber":       estimated.Fiber,
-				"ingredients": ingredients,
-				"updated_at":  now,
-			})
-			syncMealComponents(s.User.ID, existing.ID, ingredients, estimated)
-			entries = append(entries, map[string]any{
-				"dish_name":    existing.Name,
-				"meal_type":    existing.MealType,
-				"ok":           true,
-				"action":       "merged_duplicate",
-				"meal_id":      existing.ID,
-				"calories":     estimated.Calories,
-				"protein":      estimated.Protein,
-				"carbs":        estimated.Carbs,
-				"fat":          estimated.Fat,
-				"fiber":        estimated.Fiber,
-				"serving_size": estimated.ServingSize,
-				"logged_at":    existing.LoggedAt.Format(time.RFC3339),
-				"display_time": userReadableTime(s.User.ID, existing.LoggedAt),
-			})
-			continue
 		}
 
 		mealLog := models.MealLog{
@@ -99,7 +70,7 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 		return jsonString(map[string]any{"ok": false, "error": "no_meals_logged"}), nil
 	}
 
-	newState, _ := services.ComputeRemainingDayState(s.User.ID, time.Now())
+	newState, _ := services.ComputeRemainingDayState(s.User.ID, nowForUser(s.User.ID))
 	modeStr := ""
 	if newState != nil && newState.ControlMode == "DAMAGE_CONTROL" {
 		modeStr = "\n⚠️ WARNING: You are now in DAMAGE CONTROL mode!"
@@ -154,7 +125,7 @@ func HandleAskAdvice(s *Session, args map[string]interface{}) (string, error) {
 	ns := services.NewNutritionService()
 	foodName, _ := args["food_description"].(string)
 
-	state, _ := services.ComputeRemainingDayState(s.User.ID, time.Now())
+	state, _ := services.ComputeRemainingDayState(s.User.ID, nowForUser(s.User.ID))
 	if state == nil {
 		return jsonString(map[string]any{"ok": false, "error": "goal_not_found"}), nil
 	}
@@ -178,7 +149,7 @@ func HandleAskAdvice(s *Session, args map[string]interface{}) (string, error) {
 }
 
 func HandleGetBudget(s *Session, args map[string]interface{}) (string, error) {
-	state, _ := services.ComputeRemainingDayState(s.User.ID, time.Now())
+	state, _ := services.ComputeRemainingDayState(s.User.ID, nowForUser(s.User.ID))
 	if state == nil {
 		return jsonString(map[string]any{"ok": false, "error": "goal_not_found"}), nil
 	}

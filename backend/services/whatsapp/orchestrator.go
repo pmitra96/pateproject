@@ -54,7 +54,7 @@ func NewOrchestrator() *Orchestrator {
 func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 string) {
 	// 1. Daily Limit Check
 	var count int64
-	nowLocal := time.Now().In(userLocationForDisplay(s.User.ID))
+	nowLocal := nowForUser(s.User.ID)
 	todayStart, todayEnd := dayWindow(nowLocal)
 	database.DB.Model(&models.LLMUsageLog{}).
 		Where("user_id = ? AND created_at >= ? AND created_at < ?", s.User.ID, todayStart, todayEnd).
@@ -102,7 +102,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 				result := []toolExecutionResult{{ToolName: decision.ToolName, Response: parseToolResponse(resp)}}
 				reply := deterministicToolReply(result)
 				if reply == "" || reply == "Done." {
-					reply = resp
+					reply = "Done."
 				}
 				o.replySafe(s, reply)
 				updateConversationStateAfterTool(state, decision.Intent, decision.ToolName, resp)
@@ -150,6 +150,14 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	if len(assistantMsg.ToolCalls) == 0 {
 		content := o.extractText(assistantMsg)
 		if synthetic, ok := synthesizeToolCallFromActionText(content); ok {
+			if shouldBlockCorrectionLogMisfire(text, synthetic) {
+				msg := correctionSingleItemPrompt()
+				o.replySafe(s, msg)
+				updateConversationStateAfterReply(state, "llm_correction_guard", msg)
+				o.appendAssistantMessage(s.User.ID, msg)
+				return
+			}
+			synthetic = rewriteCorrectionLogMisfire(text, synthetic)
 			resp, err := o.Registry.Execute(s, synthetic)
 			if err == nil {
 				result := []toolExecutionResult{{
@@ -170,12 +178,14 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 					o.appendAssistantMessage(s.User.ID, finalReply)
 					return
 				}
-				if resp != "" {
-					o.replySafe(s, resp)
-					updateConversationStateAfterTool(state, "llm", synthetic.Function.Name, resp)
-					o.appendAssistantMessage(s.User.ID, resp)
-					return
+				human := deterministicToolReply(result)
+				if human == "" || human == "Done." {
+					human = "Done."
 				}
+				o.replySafe(s, human)
+				updateConversationStateAfterTool(state, "llm", synthetic.Function.Name, resp)
+				o.appendAssistantMessage(s.User.ID, human)
+				return
 			}
 		}
 		if inferred, ok := inferDeterministicToolCall(text); ok {
@@ -196,9 +206,13 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 					o.appendAssistantMessage(s.User.ID, finalReply)
 					return
 				}
-				o.replySafe(s, resp)
+				human := deterministicToolReply(result)
+				if human == "" || human == "Done." {
+					human = "Done."
+				}
+				o.replySafe(s, human)
 				updateConversationStateAfterTool(state, "llm", inferred.Function.Name, resp)
-				o.appendAssistantMessage(s.User.ID, resp)
+				o.appendAssistantMessage(s.User.ID, human)
 				return
 			}
 		}
@@ -224,16 +238,43 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 
 	var toolResponses []string
 	var toolResults []toolExecutionResult
+	mealCreateExecuted := false
 	for _, tc := range uniqueToolCalls {
-		resp, err := o.Registry.Execute(s, tc)
+		if shouldBlockCorrectionLogMisfire(text, tc) {
+			toolResults = append(toolResults, toolExecutionResult{
+				ToolName: "modify_logged_meal",
+				Response: map[string]any{
+					"ok":      false,
+					"error":   "correction_requires_update",
+					"message": correctionSingleItemPrompt(),
+				},
+			})
+			continue
+		}
+		execToolCall := rewriteCorrectionLogMisfire(text, tc)
+		if isMealCreateToolCall(execToolCall) {
+			if mealCreateExecuted {
+				toolResults = append(toolResults, toolExecutionResult{
+					ToolName: execToolCall.Function.Name,
+					Response: map[string]any{
+						"ok":      false,
+						"error":   "duplicate_write_blocked",
+						"message": "I skipped an extra meal logging action in this message to avoid duplicate entries.",
+					},
+				})
+				continue
+			}
+			mealCreateExecuted = true
+		}
+		resp, err := o.Registry.Execute(s, execToolCall)
 		if err != nil {
-			s.Logger.Warn("Tool Execution Error", "tool", tc.Function.Name, "error", err)
-			toolResponses = append(toolResponses, fmt.Sprintf("I tried to use '%s' but it's not available right now.", tc.Function.Name))
+			s.Logger.Warn("Tool Execution Error", "tool", execToolCall.Function.Name, "error", err)
+			toolResponses = append(toolResponses, fmt.Sprintf("I tried to use '%s' but it's not available right now.", execToolCall.Function.Name))
 			continue
 		}
 
 		toolResults = append(toolResults, toolExecutionResult{
-			ToolName: tc.Function.Name,
+			ToolName: execToolCall.Function.Name,
 			Response: parseToolResponse(resp),
 		})
 
@@ -286,10 +327,80 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 		return
 	}
 	s.Logger.Info("Reply mode", "type", "tool_raw", "tool_count", len(toolResponses))
-	finalRaw := strings.Join(toolResponses, "\n\n")
+	finalRaw := "Done."
+	if len(toolResults) > 0 {
+		if human := deterministicToolReply(toolResults); human != "" && human != "Done." {
+			finalRaw = human
+		}
+	}
+	if finalRaw == "Done." {
+		finalRaw = "I finished that request."
+	}
 	o.replySafe(s, finalRaw)
 	updateConversationStateAfterTool(state, "llm", firstToolName(toolResults), marshalToolResults(toolResults))
 	o.appendAssistantMessage(s.User.ID, finalRaw)
+}
+
+func correctionSingleItemPrompt() string {
+	return "I treated that as a correction. Please use '<item> is actually <new quantity>' so I update only that single item."
+}
+
+func rewriteCorrectionLogMisfire(text string, tc llm.ToolCall) llm.ToolCall {
+	if strings.ToLower(strings.TrimSpace(tc.Function.Name)) != "log_meals" {
+		return tc
+	}
+	decision, ok := parseDeterministicCRUD(text)
+	if !ok || decision.ToolName != "modify_logged_meal" {
+		return tc
+	}
+	return buildToolCall(decision.ToolName, decision.Args)
+}
+
+func shouldBlockCorrectionLogMisfire(text string, tc llm.ToolCall) bool {
+	if strings.ToLower(strings.TrimSpace(tc.Function.Name)) != "log_meals" {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(text))
+	isCorrection := strings.Contains(lower, " is actually ") ||
+		strings.HasPrefix(lower, "no it is ") ||
+		strings.HasPrefix(lower, "it is ") ||
+		strings.HasPrefix(lower, "it's ") ||
+		strings.Contains(lower, " wrong") ||
+		strings.Contains(lower, " incorrect") ||
+		strings.Contains(lower, " typo") ||
+		strings.Contains(lower, "change ") ||
+		strings.Contains(lower, "update ") ||
+		strings.Contains(lower, "correct ") ||
+		strings.Contains(lower, " should be ") ||
+		strings.HasPrefix(lower, "should be ") ||
+		strings.Contains(lower, " meant ") ||
+		strings.HasPrefix(lower, "meant ") ||
+		strings.Contains(lower, " instead ") ||
+		strings.Contains(lower, " replace ") ||
+		strings.HasPrefix(lower, "replace ") ||
+		strings.Contains(lower, " that was ") ||
+		strings.HasPrefix(lower, "that was ")
+	if !isCorrection {
+		return false
+	}
+	decision, ok := parseDeterministicCRUD(text)
+	return !ok || decision.ToolName != "modify_logged_meal"
+}
+
+func isMealCreateToolCall(tc llm.ToolCall) bool {
+	name := strings.ToLower(strings.TrimSpace(tc.Function.Name))
+	if name == "log_meals" {
+		return true
+	}
+	if name != "modify_logged_meal" {
+		return false
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+		return false
+	}
+	action, _ := args["action"].(string)
+	return strings.EqualFold(strings.TrimSpace(action), "add")
 }
 
 func (o *Orchestrator) tryHeuristicFallback(s *Session, text string) string {
@@ -368,7 +479,7 @@ func (o *Orchestrator) tryHeuristicFallback(s *Session, text string) string {
 }
 
 func (o *Orchestrator) buildUserContext(user *models.User) string {
-	state, _ := services.ComputeRemainingDayState(user.ID, time.Now())
+	state, _ := services.ComputeRemainingDayState(user.ID, nowForUser(user.ID))
 	context := "No active goal set."
 	if state != nil {
 		context = fmt.Sprintf("TODAY: Goal %.0f kcal. Consumed %.0f/%.0f kcal. Remaining: %.0f kcal, %.1fg protein, %.1fg carbs, %.1fg fat, %.1fg fiber. Mode: %s.",
@@ -522,6 +633,48 @@ func deterministicToolReply(results []toolExecutionResult) string {
 	}
 	r := results[0]
 	switch r.ToolName {
+	case "log_meals":
+		if m, ok := r.Response.(map[string]any); ok {
+			entries, _ := m["logged_meals"].([]any)
+			if len(entries) == 0 {
+				return "I couldn't log that meal. Please rephrase once."
+			}
+			lines := make([]string, 0, len(entries)+2)
+			for _, e := range entries {
+				em, _ := e.(map[string]any)
+				okv, _ := em["ok"].(bool)
+				name, _ := em["dish_name"].(string)
+				if !okv {
+					errCode, _ := em["error"].(string)
+					if strings.TrimSpace(name) == "" {
+						name = "item"
+					}
+					lines = append(lines, fmt.Sprintf("- %s: could not log (%s)", name, errCode))
+					continue
+				}
+				cal := getFloat(em["calories"])
+				pro := getFloat(em["protein"])
+				carbs := getFloat(em["carbs"])
+				fat := getFloat(em["fat"])
+				fiber := getFloat(em["fiber"])
+				displayTime, _ := em["display_time"].(string)
+				if displayTime == "" {
+					displayTime = "now"
+				}
+				lines = append(lines, fmt.Sprintf("- %s at %s: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg", name, displayTime, cal, pro, carbs, fat, fiber))
+			}
+			out := "Logged meals:\n" + strings.Join(lines, "\n")
+			if remaining, ok := m["remaining"].(map[string]any); ok {
+				out += fmt.Sprintf("\n\nRemaining today: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg.",
+					getFloat(remaining["calories"]),
+					getFloat(remaining["protein"]),
+					getFloat(remaining["carbs"]),
+					getFloat(remaining["fat"]),
+					getFloat(remaining["fiber"]),
+				)
+			}
+			return out
+		}
 	case "get_daily_summary":
 		if m, ok := r.Response.(map[string]any); ok {
 			if getCount(m["count"]) == 0 {
@@ -591,6 +744,41 @@ func deterministicToolReply(results []toolExecutionResult) string {
 			if msg, _ := m["message"].(string); strings.TrimSpace(msg) != "" {
 				return strings.TrimSpace(msg)
 			}
+			if okv, _ := m["ok"].(bool); okv {
+				action, _ := m["action"].(string)
+				dish, _ := m["dish_name"].(string)
+				mealType, _ := m["meal_type"].(string)
+				if dish == "" {
+					dish = "meal"
+				}
+				switch strings.ToLower(strings.TrimSpace(action)) {
+				case "delete":
+					if mealType != "" {
+						return fmt.Sprintf("Deleted %s from %s.", dish, mealType)
+					}
+					return fmt.Sprintf("Deleted %s.", dish)
+				case "update":
+					cal := getFloat(m["calories"])
+					pro := getFloat(m["protein"])
+					carbs := getFloat(m["carbs"])
+					fat := getFloat(m["fat"])
+					fiber := getFloat(m["fiber"])
+					if cal > 0 || pro > 0 || carbs > 0 || fat > 0 || fiber > 0 {
+						return fmt.Sprintf("Updated %s: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg.", dish, cal, pro, carbs, fat, fiber)
+					}
+					return fmt.Sprintf("Updated %s.", dish)
+				case "add":
+					cal := getFloat(m["calories"])
+					pro := getFloat(m["protein"])
+					carbs := getFloat(m["carbs"])
+					fat := getFloat(m["fat"])
+					fiber := getFloat(m["fiber"])
+					if mealType != "" {
+						return fmt.Sprintf("Added %s to %s: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg.", dish, mealType, cal, pro, carbs, fat, fiber)
+					}
+					return fmt.Sprintf("Added %s.", dish)
+				}
+			}
 		}
 	case "get_leftover_budget":
 		if m, ok := r.Response.(map[string]any); ok {
@@ -605,6 +793,164 @@ func deterministicToolReply(results []toolExecutionResult) string {
 				mode = "NORMAL"
 			}
 			return fmt.Sprintf("Remaining today: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg. Mode: %s.", cal, pro, carbs, fat, fiber, mode)
+		}
+	case "clear_all_meals_today":
+		if m, ok := r.Response.(map[string]any); ok {
+			return fmt.Sprintf("Cleared %.0f meals from today.", getFloat(m["deleted_count"]))
+		}
+	case "set_daily_goal":
+		if m, ok := r.Response.(map[string]any); ok {
+			if !getBool(m["ok"]) {
+				return "I couldn't update your goal. Please share a valid calorie target."
+			}
+			return fmt.Sprintf("Updated your daily calorie goal to %.0f kcal.", getFloat(m["daily_calorie_target"]))
+		}
+	case "ask_advice":
+		if m, ok := r.Response.(map[string]any); ok {
+			decision, _ := m["decision"].(string)
+			reason, _ := m["reason"].(string)
+			if decision == "" {
+				decision = "Here is your guidance."
+			}
+			if strings.TrimSpace(reason) != "" {
+				return strings.TrimSpace(decision) + " " + strings.TrimSpace(reason)
+			}
+			return strings.TrimSpace(decision)
+		}
+	case "update_user_profile":
+		return "Profile updated."
+	case "update_pantry":
+		return "Pantry updated."
+	case "get_past_day_summary":
+		if m, ok := r.Response.(map[string]any); ok {
+			date, _ := m["date"].(string)
+			count := getCount(m["count"])
+			if count == 0 {
+				if date == "" {
+					return "No meals found for that date."
+				}
+				return fmt.Sprintf("No meals found for %s.", date)
+			}
+			out := "Past day summary:\n"
+			if lines, ok := m["lines"].([]any); ok {
+				for _, l := range lines {
+					if s, ok := l.(string); ok {
+						out += s + "\n"
+					}
+				}
+			}
+			return strings.TrimSpace(out)
+		}
+	case "create_recipe":
+		if m, ok := r.Response.(map[string]any); ok {
+			name, _ := m["name"].(string)
+			if name == "" {
+				name = "recipe"
+			}
+			return fmt.Sprintf("Saved recipe: %s.", name)
+		}
+	case "get_pantry":
+		if m, ok := r.Response.(map[string]any); ok {
+			if items, ok := m["items"].([]any); ok {
+				if len(items) == 0 {
+					return "Your pantry is empty."
+				}
+				out := "Pantry items:\n"
+				for _, it := range items {
+					if s, ok := it.(string); ok {
+						out += s + "\n"
+					}
+				}
+				return strings.TrimSpace(out)
+			}
+		}
+	case "get_recipes":
+		if m, ok := r.Response.(map[string]any); ok {
+			if recipes, ok := m["recipes"].([]any); ok {
+				if len(recipes) == 0 {
+					return "No saved recipes yet."
+				}
+				out := "Saved recipes:\n"
+				for _, it := range recipes {
+					if s, ok := it.(string); ok {
+						out += s + "\n"
+					}
+				}
+				return strings.TrimSpace(out)
+			}
+		}
+	case "delete_recipe":
+		if m, ok := r.Response.(map[string]any); ok {
+			if !getBool(m["ok"]) {
+				return "Recipe not found."
+			}
+			name, _ := m["deleted_recipe"].(string)
+			if name == "" {
+				return "Recipe deleted."
+			}
+			return fmt.Sprintf("Deleted recipe: %s.", name)
+		}
+	case "get_meal_log_time":
+		if m, ok := r.Response.(map[string]any); ok {
+			if !getBool(m["found"]) {
+				return "I couldn't find that meal log."
+			}
+			if meal, ok := m["meal"].(map[string]any); ok {
+				name, _ := meal["name"].(string)
+				ts, _ := meal["logged_at"].(string)
+				if name != "" && ts != "" {
+					return fmt.Sprintf("%s was logged at %s.", name, ts)
+				}
+			}
+		}
+	case "get_recent_meals":
+		if m, ok := r.Response.(map[string]any); ok {
+			if meals, ok := m["meals"].([]any); ok {
+				if len(meals) == 0 {
+					return "No recent meals found."
+				}
+				out := "Recent meals:\n"
+				for _, mi := range meals {
+					if mm, ok := mi.(map[string]any); ok {
+						name, _ := mm["name"].(string)
+						mt, _ := mm["meal_type"].(string)
+						cal := getFloat(mm["calories"])
+						out += fmt.Sprintf("- %s (%s): %.0f kcal\n", name, mt, cal)
+					}
+				}
+				return strings.TrimSpace(out)
+			}
+		}
+	case "get_active_goal":
+		if m, ok := r.Response.(map[string]any); ok {
+			if !getBool(m["has_active_goal"]) {
+				return "No active goal set."
+			}
+			if g, ok := m["goal"].(map[string]any); ok {
+				return fmt.Sprintf("Active goal: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg.",
+					getFloat(g["daily_calorie_target"]),
+					getFloat(g["daily_protein_target"]),
+					getFloat(g["daily_carbs_target"]),
+					getFloat(g["daily_fat_target"]),
+					getFloat(g["daily_fiber_target"]),
+				)
+			}
+		}
+	case "get_user_profile":
+		if m, ok := r.Response.(map[string]any); ok {
+			if !getBool(m["has_profile"]) {
+				return "No profile saved yet."
+			}
+			return "Profile details fetched."
+		}
+	case "get_recent_orders":
+		if m, ok := r.Response.(map[string]any); ok {
+			if orders, ok := m["orders"].([]any); ok {
+				if len(orders) == 0 {
+					return "No recent orders found."
+				}
+				return fmt.Sprintf("Found %d recent orders.", len(orders))
+			}
 		}
 	}
 	return "Done."
@@ -629,6 +975,15 @@ func getFloat(v any) float64 {
 		return float64(n)
 	default:
 		return 0
+	}
+}
+
+func getBool(v any) bool {
+	switch b := v.(type) {
+	case bool:
+		return b
+	default:
+		return false
 	}
 }
 
@@ -737,7 +1092,12 @@ func (o *Orchestrator) tryResolvePendingMealSelection(s *Session, st *models.Con
 
 	selectedID, ok := resolveMealChoiceFromText(text, ids)
 	if !ok {
-		return false
+		last := len(ids) - 1
+		if last < 0 {
+			last = 0
+		}
+		o.replySafe(s, fmt.Sprintf("Please reply with a number between 0 and %d to choose the meal.", last))
+		return true
 	}
 
 	var meal models.MealLog
@@ -753,42 +1113,62 @@ func (o *Orchestrator) tryResolvePendingMealSelection(s *Session, st *models.Con
 		"target_dish_name": meal.Name,
 	}
 	if st.PendingMealAction == "update" {
-		args["new_ingredients"] = text
+		meta := getPendingSelectionMeta(st)
+		newIngredients, _ := meta["pending_update_ingredients"].(string)
+		if strings.TrimSpace(newIngredients) == "" {
+			o.replySafe(s, "I need the corrected ingredients before I can update this meal. Please resend the correction.")
+			return true
+		}
+		args["new_ingredients"] = newIngredients
 	}
 	tc := buildToolCall("modify_logged_meal", args)
 	resp, err := o.Registry.Execute(s, tc)
-	clearPendingMealSelection(st)
 	if err != nil || strings.TrimSpace(resp) == "" {
 		return false
 	}
-	o.replySafe(s, "Updated. "+resp)
-	o.appendConversationTurn(s.User.ID, text, "Updated.")
+	clearPendingMealSelection(st)
+	result := []toolExecutionResult{{ToolName: "modify_logged_meal", Response: parseToolResponse(resp)}}
+	reply := deterministicToolReply(result)
+	if reply == "" || reply == "Done." {
+		reply = "Done."
+	}
+	o.replySafe(s, reply)
+	updateConversationStateAfterTool(st, "pending_meal_resolution", "modify_logged_meal", resp)
+	o.appendConversationTurn(s.User.ID, text, reply)
 	return true
 }
 
 func resolveMealChoiceFromText(text string, ids []uint) (uint, bool) {
-	lower := strings.ToLower(strings.TrimSpace(text))
-	if n, err := strconv.Atoi(lower); err == nil {
+	choice := strings.ToLower(strings.TrimSpace(text))
+	choice = strings.Trim(choice, ".,!?")
+
+	if !regexp.MustCompile(`^\d+$`).MatchString(choice) {
+		switch choice {
+		case "first":
+			if len(ids) >= 1 {
+				return ids[0], true
+			}
+			return 0, false
+		case "second":
+			if len(ids) >= 2 {
+				return ids[1], true
+			}
+			return 0, false
+		case "last":
+			if len(ids) >= 1 {
+				return ids[len(ids)-1], true
+			}
+			return 0, false
+		default:
+			return 0, false
+		}
+	}
+
+	if n, err := strconv.Atoi(choice); err == nil {
 		if n >= 0 && n < len(ids) {
 			return ids[n], true
 		}
-	}
-	if lower == "first" || strings.Contains(lower, "first one") || lower == "1" {
-		return ids[0], true
-	}
-	if lower == "second" || strings.Contains(lower, "second one") || lower == "2" {
-		if len(ids) >= 2 {
-			return ids[1], true
-		}
-	}
-	if strings.Contains(lower, "last") {
-		return ids[len(ids)-1], true
-	}
-	for i := range ids {
-		n := i
-		if strings.Contains(lower, strconv.Itoa(n)) {
-			return ids[i], true
-		}
+		return 0, false
 	}
 	return 0, false
 }

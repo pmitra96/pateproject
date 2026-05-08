@@ -177,3 +177,50 @@ func TestProcessWhatsAppPayload_DuplicateMessageIsSkipped(t *testing.T) {
 	}
 }
 
+func TestProcessWhatsAppPayload_EmptyMessageID_DuplicatePayloadIsSkipped(t *testing.T) {
+	setupControllerTestDB(t)
+
+	oldClient := newWhatsAppClient
+	oldIntent := processWhatsAppIntent
+	defer func() {
+		newWhatsAppClient = oldClient
+		processWhatsAppIntent = oldIntent
+	}()
+
+	newWhatsAppClient = func() whatsapp.WhatsAppClient { return &testWhatsAppClient{} }
+	intentCalls := 0
+	processWhatsAppIntent = func(session *whatsapp.Session, textBody string, imageBase64 string) {
+		intentCalls++
+	}
+
+	payload := map[string]interface{}{
+		"entry": []interface{}{
+			map[string]interface{}{
+				"changes": []interface{}{
+					map[string]interface{}{
+						"value": map[string]interface{}{
+							"messages": []interface{}{
+								map[string]interface{}{
+									"from": "333", "type": "text",
+									"text":      map[string]interface{}{"body": "hello duplicate"},
+									"timestamp": "1715000000",
+								},
+								map[string]interface{}{
+									"from": "333", "type": "text",
+									"text":      map[string]interface{}{"body": "hello duplicate"},
+									"timestamp": "1715000000",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	processWhatsAppPayload(payload)
+
+	if intentCalls != 1 {
+		t.Fatalf("expected fallback dedupe to skip duplicate payload and call intent once, got %d", intentCalls)
+	}
+}

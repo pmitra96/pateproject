@@ -1,7 +1,9 @@
 package controllers
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -105,6 +107,7 @@ func processSingleWhatsAppMessage(message map[string]interface{}) {
 
 	var textBody string
 	var imageBase64 string
+	var mediaID string
 	msgType, _ := message["type"].(string)
 
 	if msgType == "text" {
@@ -112,7 +115,7 @@ func processSingleWhatsAppMessage(message map[string]interface{}) {
 		textBody, _ = textObj["body"].(string)
 	} else if msgType == "image" {
 		imageObj, _ := message["image"].(map[string]interface{})
-		mediaID, _ := imageObj["id"].(string)
+		mediaID, _ = imageObj["id"].(string)
 		textBody, _ = imageObj["caption"].(string)
 
 		imgBytes, err := client.DownloadMedia(mediaID)
@@ -125,8 +128,30 @@ func processSingleWhatsAppMessage(message map[string]interface{}) {
 		return
 	}
 
+	if msgID == "" {
+		ts, _ := message["timestamp"].(string)
+		fallback := fallbackWebhookMessageKey(fromPhone, msgType, textBody, mediaID, ts)
+		if err := database.DB.Create(&models.ProcessedWebhook{MessageID: fallback}).Error; err != nil {
+			errText := strings.ToLower(err.Error())
+			if strings.Contains(errText, "duplicate") || strings.Contains(errText, "unique") {
+				return
+			}
+			logger.Error("Failed to persist fallback webhook dedup key; continuing", "fallback_key", fallback, "error", err)
+		}
+	}
+
 	session := whatsapp.NewSession(user, msgID, logger.L().With("user_id", user.ID, "message_id", msgID))
 	processWhatsAppIntent(session, textBody, imageBase64)
+}
+
+func fallbackWebhookMessageKey(fromPhone, msgType, textBody, mediaID, timestamp string) string {
+	payload := strings.ToLower(strings.TrimSpace(fromPhone)) + "|" +
+		strings.ToLower(strings.TrimSpace(msgType)) + "|" +
+		strings.TrimSpace(timestamp) + "|" +
+		strings.ToLower(strings.TrimSpace(textBody)) + "|" +
+		strings.TrimSpace(mediaID)
+	sum := sha256.Sum256([]byte(payload))
+	return "fallback:" + hex.EncodeToString(sum[:16])
 }
 
 func GetOrCreateWhatsAppUser(phone string) (*models.User, error) {

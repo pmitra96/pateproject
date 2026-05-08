@@ -12,6 +12,14 @@ import (
 	"github.com/pmitra96/pateproject/services"
 )
 
+func defaultUserLocation() *time.Location {
+	loc, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		return time.FixedZone("IST", 5*60*60+30*60)
+	}
+	return loc
+}
+
 func userLocationForDisplay(userID uint) *time.Location {
 	var prefs models.UserPreferences
 	if err := database.DB.Where("user_id = ?", userID).First(&prefs).Error; err == nil {
@@ -21,7 +29,11 @@ func userLocationForDisplay(userID uint) *time.Location {
 			}
 		}
 	}
-	return time.Local
+	return defaultUserLocation()
+}
+
+func nowForUser(userID uint) time.Time {
+	return time.Now().In(userLocationForDisplay(userID))
 }
 
 func userReadableTime(userID uint, t time.Time) string {
@@ -31,7 +43,7 @@ func userReadableTime(userID uint, t time.Time) string {
 
 // HandleGetDailySummary returns a summary of all meals logged today
 func HandleGetDailySummary(s *Session, args map[string]interface{}) (string, error) {
-	nowLocal := time.Now().In(userLocationForDisplay(s.User.ID))
+	nowLocal := nowForUser(s.User.ID)
 	todayStart, todayEnd := dayWindow(nowLocal)
 	var meals []models.MealLog
 	database.DB.Where("user_id = ? AND logged_at >= ? AND logged_at < ?", s.User.ID, todayStart, todayEnd).
@@ -72,7 +84,7 @@ func HandleGetDailySummary(s *Session, args map[string]interface{}) (string, err
 		totalFiber += m.Fiber
 	}
 
-	state, _ := services.ComputeRemainingDayState(s.User.ID, time.Now())
+	state, _ := services.ComputeRemainingDayState(s.User.ID, nowForUser(s.User.ID))
 	remaining := ""
 	budgetFeedback := "Good progress. Keep balancing your remaining meals."
 	if state != nil {
@@ -127,8 +139,7 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 	targetDish, _ := args["target_dish_name"].(string)
 	newIngredients, _ := args["new_ingredients"].(string)
 
-	loc := userLocationForDisplay(s.User.ID)
-	nowLocal := time.Now().In(loc)
+	nowLocal := nowForUser(s.User.ID)
 	todayStart, todayEnd := dayWindow(nowLocal)
 	candidates, err := findMealsForDay(s.User.ID, mealType, todayStart, todayEnd)
 	if err != nil {
@@ -151,7 +162,7 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 				for _, c := range candidates {
 					ids = append(ids, c.ID)
 				}
-				setPendingMealSelection(getConversationState(s.User.ID), "delete", ids)
+				setPendingMealSelection(getConversationState(s.User.ID), "delete", ids, nil)
 				return jsonString(ambiguousMealsPayload(candidates, reason)), nil
 			}
 			return jsonString(map[string]any{"ok": false, "error": reason, "meal_type": mealType, "dish_name": targetDish}), nil
@@ -189,7 +200,10 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 				for _, c := range candidates {
 					ids = append(ids, c.ID)
 				}
-				setPendingMealSelection(getConversationState(s.User.ID), "update", ids)
+				meta := map[string]any{
+					"pending_update_ingredients": newIngredients,
+				}
+				setPendingMealSelection(getConversationState(s.User.ID), "update", ids, meta)
 				return jsonString(ambiguousMealsPayload(candidates, reason)), nil
 			}
 			return jsonString(map[string]any{"ok": false, "error": reason, "meal_type": mealType, "dish_name": targetDish}), nil
@@ -229,7 +243,7 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 			Carbs:       estimated.Carbs,
 			Fat:         estimated.Fat,
 			Fiber:       estimated.Fiber,
-			LoggedAt:    time.Now(),
+			LoggedAt:    nowForUser(s.User.ID),
 		}
 		database.DB.Create(&newMeal)
 		syncMealComponents(s.User.ID, newMeal.ID, newIngredients, estimated)
@@ -279,7 +293,7 @@ func HandleGetPastDaySummary(s *Session, args map[string]interface{}) (string, e
 
 // HandleClearAllMealsToday deletes all meals logged today
 func HandleClearAllMealsToday(s *Session, args map[string]interface{}) (string, error) {
-	nowLocal := time.Now().In(userLocationForDisplay(s.User.ID))
+	nowLocal := nowForUser(s.User.ID)
 	todayStart, todayEnd := dayWindow(nowLocal)
 	result := database.DB.Where("user_id = ? AND logged_at >= ? AND logged_at < ?", s.User.ID, todayStart, todayEnd).Delete(&models.MealLog{})
 	return jsonString(map[string]any{"ok": true, "deleted_count": result.RowsAffected}), nil
@@ -411,7 +425,7 @@ func HandleGetMealLogTime(s *Session, args map[string]interface{}) (string, erro
 		}
 		dayStart = parsed
 	} else {
-		nowLocal := time.Now().In(userLocationForDisplay(s.User.ID))
+		nowLocal := nowForUser(s.User.ID)
 		dayStart, _ = dayWindow(nowLocal)
 		dateStr = dayStart.Format("2006-01-02")
 	}

@@ -104,12 +104,27 @@ func isUpdateIntent(lower string) bool {
 	if strings.Contains(lower, " is actually ") {
 		return true
 	}
+	if strings.HasPrefix(lower, "no it is ") || strings.HasPrefix(lower, "it is ") || strings.HasPrefix(lower, "it's ") {
+		return true
+	}
 	return strings.Contains(lower, " change ") ||
 		strings.HasPrefix(lower, "change ") ||
 		strings.Contains(lower, " update ") ||
 		strings.HasPrefix(lower, "update ") ||
 		strings.Contains(lower, " correct ") ||
 		strings.HasPrefix(lower, "correct ") ||
+		strings.Contains(lower, " wrong") ||
+		strings.Contains(lower, " incorrect") ||
+		strings.Contains(lower, " typo") ||
+		strings.Contains(lower, " should be ") ||
+		strings.HasPrefix(lower, "should be ") ||
+		strings.Contains(lower, " meant ") ||
+		strings.HasPrefix(lower, "meant ") ||
+		strings.Contains(lower, " instead ") ||
+		strings.Contains(lower, " replace ") ||
+		strings.HasPrefix(lower, "replace ") ||
+		strings.Contains(lower, " that was ") ||
+		strings.HasPrefix(lower, "that was ") ||
 		strings.HasPrefix(lower, "make ")
 }
 
@@ -175,15 +190,11 @@ func extractDeleteTarget(text, mealType string) string {
 
 func extractUpdateTargetAndReplacement(text, mealType string) (string, string) {
 	raw := strings.TrimSpace(text)
-	lower := strings.ToLower(raw)
-
-	if strings.Contains(lower, " is actually ") {
-		parts := strings.SplitN(raw, " is actually ", 2)
-		if len(parts) == 2 {
-			target := cleanFoodPhrase(parts[0], mealType)
-			repl := cleanFoodPhrase(parts[1], mealType)
-			return target, coerceReplacement(target, repl)
-		}
+	reActually := regexp.MustCompile(`(?i)^(.*?)\s+is actually\s+(.+)$`)
+	if m := reActually.FindStringSubmatch(raw); len(m) == 3 {
+		target := cleanFoodPhrase(m[1], mealType)
+		repl := cleanFoodPhrase(m[2], mealType)
+		return target, coerceReplacement(target, repl)
 	}
 
 	reTo := regexp.MustCompile(`(?i)^(?:please\s+)?(?:change|update|correct|make)\s+(.+?)\s+(?:to|as)\s+(.+)$`)
@@ -200,7 +211,51 @@ func extractUpdateTargetAndReplacement(text, mealType string) (string, string) {
 		return target, coerceReplacement(target, repl)
 	}
 
+	reNoItIs := regexp.MustCompile(`(?i)^(?:no\s+)?it\s+is\s+(.+)$`)
+	if m := reNoItIs.FindStringSubmatch(raw); len(m) == 2 {
+		repl := cleanFoodPhrase(m[1], mealType)
+		target := inferTargetFromReplacement(repl)
+		if target != "" && repl != "" {
+			return target, coerceReplacement(target, repl)
+		}
+	}
+
+	reIts := regexp.MustCompile(`(?i)^it's\s+(.+)$`)
+	if m := reIts.FindStringSubmatch(raw); len(m) == 2 {
+		repl := cleanFoodPhrase(m[1], mealType)
+		target := inferTargetFromReplacement(repl)
+		if target != "" && repl != "" {
+			return target, coerceReplacement(target, repl)
+		}
+	}
+
+	reShouldBe := regexp.MustCompile(`(?i)^(?:no[, ]+)?(?:it\s+)?should\s+be\s+(.+)$`)
+	if m := reShouldBe.FindStringSubmatch(raw); len(m) == 2 {
+		repl := cleanFoodPhrase(m[1], mealType)
+		target := inferTargetFromReplacement(repl)
+		if target != "" && repl != "" {
+			return target, coerceReplacement(target, repl)
+		}
+	}
+
+	reMeant := regexp.MustCompile(`(?i)^(?:i\s+)?meant\s+(.+)$`)
+	if m := reMeant.FindStringSubmatch(raw); len(m) == 2 {
+		repl := cleanFoodPhrase(m[1], mealType)
+		target := inferTargetFromReplacement(repl)
+		if target != "" && repl != "" {
+			return target, coerceReplacement(target, repl)
+		}
+	}
+
 	return "", ""
+}
+
+func inferTargetFromReplacement(replacement string) string {
+	base := strings.TrimSpace(replacement)
+	reQtyPrefix := regexp.MustCompile(`(?i)^\s*(?:about|around)?\s*(?:half|quarter|\d+(?:\.\d+)?)\s*(?:g|gm|kg|ml|l|tsp|tbsp|cup|cups|slice|slices|piece|pieces|serving|servings)?\s*(?:of\s+)?`)
+	base = strings.TrimSpace(reQtyPrefix.ReplaceAllString(base, ""))
+	base = strings.Trim(base, " .,!?:;")
+	return strings.Join(strings.Fields(base), " ")
 }
 
 func coerceReplacement(target, replacement string) string {

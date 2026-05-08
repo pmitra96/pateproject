@@ -21,3 +21,23 @@ func TestResolveMealChoiceFromText_ZeroBasedIndex(t *testing.T) {
 	}
 }
 
+func TestResolveMealChoiceFromText_DoesNotSubstringMatch(t *testing.T) {
+	ids := []uint{11, 22}
+
+	if got, ok := resolveMealChoiceFromText("10", ids); ok {
+		t.Fatalf("expected no match for \"10\" with 2 options, got id=%d", got)
+	}
+}
+
+func TestResolveMealChoiceFromText_StrictWordsOnly(t *testing.T) {
+	ids := []uint{11, 22, 33}
+
+	got, ok := resolveMealChoiceFromText("first", ids)
+	if !ok || got != 11 {
+		t.Fatalf("expected first -> 11, got ok=%v id=%d", ok, got)
+	}
+
+	if _, ok := resolveMealChoiceFromText("first one", ids); ok {
+		t.Fatalf("expected strict parser to reject \"first one\"")
+	}
+}

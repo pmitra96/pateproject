@@ -37,6 +37,26 @@ func LogMeal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		idempotencyKey = strings.TrimSpace(r.Header.Get("X-Idempotency-Key"))
+	}
+	if idempotencyKey != "" {
+		dedupeKey := "mealapi:" + strconv.Itoa(int(userID)) + ":" + idempotencyKey
+		if err := database.DB.Create(&models.ProcessedWebhook{MessageID: dedupeKey}).Error; err != nil {
+			errText := strings.ToLower(err.Error())
+			if strings.Contains(errText, "duplicate") || strings.Contains(errText, "unique") {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"status":  "success",
+					"message": "Duplicate request ignored",
+				})
+				return
+			}
+			logger.Error("Failed to persist meal idempotency key; continuing", "key", dedupeKey, "error", err)
+		}
+	}
+
 	var req LogMealRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
