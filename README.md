@@ -249,7 +249,7 @@ Production deployment is handled by repository scripts under `scripts/`:
 - **Backend**: Google Cloud Run (`pateproject-backend`, region `asia-southeast1`)
 - **Container Registry**: Artifact Registry (`pateproject-repo`)
 - **Frontend**: Firebase Hosting
-- **Secrets**: Google Secret Manager
+- **Secrets**: Environment variables (`.env` -> Cloud Run env vars)
 
 ### One-Time Setup
 
@@ -276,11 +276,10 @@ bash scripts/deploy-gcp.sh --frontend
 ### What `deploy-gcp.sh` Does
 
 1. Creates Artifact Registry repository if missing.
-2. Syncs `.env` secrets to Secret Manager.
-3. Builds and pushes backend image from `backend/Dockerfile.gcp`.
-4. Deploys Cloud Run service with `--set-secrets`.
-5. Builds frontend, deploys to Firebase Hosting.
-6. Updates `ALLOWED_ORIGINS` secret to include Firebase URL and refreshes Cloud Run secret binding.
+2. Builds and pushes backend image from `backend/Dockerfile.gcp`.
+3. Deploys Cloud Run service with `--env-vars-file` (env-only mode).
+4. Builds frontend, deploys to Firebase Hosting.
+5. Updates `ALLOWED_ORIGINS` environment variable to include Firebase URL.
 
 ### Verify Deployment
 

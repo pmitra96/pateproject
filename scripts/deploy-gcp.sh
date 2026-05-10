@@ -72,7 +72,7 @@ if [ "$BUILD_MODE" != "local" ] && [ "$BUILD_MODE" != "cloud" ]; then
     exit 1
 fi
 if [ -n "$SECRET_MODE_ARG" ] && [ "$SECRET_MODE_ARG" != "env" ]; then
-    echo "Error: Secret Manager mode has been removed. Use env-only deployment."
+    echo "Error: only env-only deployment is supported."
     exit 1
 fi
 if [ "$SECRET_MODE_ARG" = "env" ]; then
@@ -178,7 +178,7 @@ echo "  ✅ Docker authenticated"
 
 # ── STEP 3: Secret handling ──────────────────────────────────────────────────
 echo ""
-echo "▶ Secret mode: env-only (Secret Manager disabled)"
+echo "▶ Secret mode: env-only"
 
 # ── STEP 4: Deploy Backend ────────────────────────────────────────────────────
 if [ "$DEPLOY_BACKEND" = true ]; then
