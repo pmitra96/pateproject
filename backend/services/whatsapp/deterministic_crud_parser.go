@@ -8,7 +8,7 @@ import (
 
 var (
 	reMealType = regexp.MustCompile(`(?i)\b(breakfast|lunch|dinner|snack)\b`)
-	reBullet   = regexp.MustCompile(`^\s*(?:\d+[\)\.\-:]?\s*|[-*]\s*)`)
+	reBullet   = regexp.MustCompile(`^\s*(?:\d+[\)\.\-:]\s*|[-*]\s*)`)
 	reQtyOnly  = regexp.MustCompile(`(?i)^\s*(?:half|quarter|\d+(?:\.\d+)?)\s*(?:x|g|gm|kg|ml|l|tsp|tbsp|cup|cups|slice|slices|piece|pieces|pc|pcs|no|nos|number|numbers|serving|servings)?\s*$`)
 )
 

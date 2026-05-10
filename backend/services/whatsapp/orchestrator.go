@@ -13,6 +13,7 @@ import (
 	"github.com/pmitra96/pateproject/config"
 	"github.com/pmitra96/pateproject/database"
 	"github.com/pmitra96/pateproject/llm"
+	"github.com/pmitra96/pateproject/logger"
 	"github.com/pmitra96/pateproject/models"
 	"github.com/pmitra96/pateproject/services"
 	"gorm.io/gorm"
@@ -21,6 +22,12 @@ import (
 
 type Orchestrator struct {
 	Registry *ToolRegistry
+}
+
+type llmCallResult struct {
+	msg   *llm.Message
+	usage llm.Usage
+	err   error
 }
 
 type toolExecutionResult struct {
@@ -55,17 +62,22 @@ func NewOrchestrator() *Orchestrator {
 }
 
 func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 string) {
+	traceID := newTraceID()
+	s.Logger.Info("ProcessMessage started", "trace_id", traceID, "text_len", len(text), "has_image", imageBase64 != "")
 	// 1. Daily Limit Check
-	var count int64
-	nowLocal := nowForUser(s.User.ID)
-	todayStart, todayEnd := dayWindow(nowLocal)
-	database.DB.Model(&models.LLMUsageLog{}).
-		Where("user_id = ? AND created_at >= ? AND created_at < ?", s.User.ID, todayStart, todayEnd).
-		Count(&count)
-	if count >= int64(config.GetWhatsAppDailyLimit()) {
-		s.Logger.Warn("User reached daily limit")
-		o.replySafe(s, MsgErrorLimit)
-		return
+	appEnv := strings.ToLower(strings.TrimSpace(config.GetEnv("APP_ENV", "development")))
+	if appEnv == "production" {
+		var count int64
+		nowLocal := nowForUser(s.User.ID)
+		todayStart, todayEnd := dayWindow(nowLocal)
+		database.DB.Model(&models.LLMUsageLog{}).
+			Where("user_id = ? AND created_at >= ? AND created_at < ?", s.User.ID, todayStart, todayEnd).
+			Count(&count)
+		if count >= int64(config.GetWhatsAppDailyLimit()) {
+			s.Logger.Warn("User reached daily limit")
+			o.replySafe(s, MsgErrorLimit)
+			return
+		}
 	}
 
 	// 2. Initial Acknowledgement
@@ -86,10 +98,10 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 
 	// 4.5 V2 deterministic router for core intents.
 	state := getConversationState(s.User.ID)
+	clearStalePendingSelectionIfNeeded(state)
 	if handled := o.tryResolvePendingMealSelection(s, state, text); handled {
 		return
 	}
-	traceID := newTraceID()
 	if toolName, toolArgs, handled, pendingReply := resolvePendingActionChoice(state, s.MessageID, text); handled {
 		if pendingReply != "" {
 			o.replySafe(s, pendingReply)
@@ -195,18 +207,42 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	}
 
 	// 5. Call LLM
+	s.Logger.Info("Calling LLM", "trace_id", traceID, "history_len", len(history))
 	startTime := time.Now()
 	history = compactHistoryForLLM(history, 12)
-	assistantMsg, usage, err := llmClient.ProcessWhatsAppConversation(text, imageBase64, history, userContext)
+	llmTimeout := 25 * time.Second
+	resCh := make(chan llmCallResult, 1)
+	go func() {
+		msg, usage, err := llmClient.ProcessWhatsAppConversation(text, imageBase64, history, userContext)
+		resCh <- llmCallResult{msg: msg, usage: usage, err: err}
+	}()
+	var assistantMsg *llm.Message
+	var usage llm.Usage
+	var err error
+	select {
+	case res := <-resCh:
+		assistantMsg = res.msg
+		usage = res.usage
+		err = res.err
+	case <-time.After(llmTimeout):
+		msg := "I’m taking too long to process that right now. Please retry once."
+		s.Logger.Error("LLM Processing Timeout", "trace_id", traceID, "timeout_ms", llmTimeout.Milliseconds())
+		o.replySafe(s, msg)
+		o.appendConversationTurn(s.User.ID, text, msg)
+		return
+	}
 	duration := time.Since(startTime)
+	s.Logger.Info("LLM call returned", "trace_id", traceID, "duration_ms", duration.Milliseconds(), "has_error", err != nil)
 
 	if err != nil {
 		s.Logger.Error("LLM Processing Error", "error", err, "duration_ms", duration.Milliseconds())
 		if heuristic := o.tryHeuristicFallback(s, text); heuristic != "" {
 			o.replySafe(s, heuristic)
+			o.appendConversationTurn(s.User.ID, text, heuristic)
 			return
 		}
 		o.replySafe(s, MsgErrorBrain)
+		o.appendConversationTurn(s.User.ID, text, MsgErrorBrain)
 		return
 	}
 	s.Logger.Info("LLM Processing Complete", "duration_ms", duration.Milliseconds(), "total_tokens", usage.TotalTokens)
@@ -299,9 +335,11 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 		if content == "" {
 			if heuristic := o.tryHeuristicFallback(s, text); heuristic != "" {
 				o.replySafe(s, heuristic)
+				o.appendAssistantMessage(s.User.ID, heuristic)
 				return
 			}
 			o.replySafe(s, MsgErrorEmpty)
+			o.appendAssistantMessage(s.User.ID, MsgErrorEmpty)
 		} else {
 			s.Logger.Info("Reply mode", "type", "direct_llm")
 			o.replySafe(s, content)
@@ -592,9 +630,11 @@ func (o *Orchestrator) buildUserContext(user *models.User) string {
 }
 
 func (o *Orchestrator) updateHistory(userID uint, userText string, assistantMsg *llm.Message) {
-	database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		var latestConv models.Conversation
-		tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", userID).First(&latestConv)
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", userID).First(&latestConv).Error; err != nil && err != gorm.ErrRecordNotFound {
+			return err
+		}
 
 		var latestHistory []llm.Message
 		if latestConv.Messages != "" {
@@ -616,6 +656,9 @@ func (o *Orchestrator) updateHistory(userID uint, userText string, assistantMsg 
 		}
 		return tx.Model(&latestConv).Update("messages", string(historyJSON)).Error
 	})
+	if err != nil {
+		logger.Error("Failed to update conversation history", "user_id", userID, "error", err)
+	}
 }
 
 func (o *Orchestrator) replySafe(s *Session, text string) {
@@ -739,13 +782,23 @@ func deterministicToolReply(results []toolExecutionResult) string {
 				fiber := getFloat(em["fiber"])
 				displayTime, _ := em["display_time"].(string)
 				servingSize, _ := em["serving_size"].(string)
+				qtyValue := getFloat(em["quantity_value"])
+				qtyUnit, _ := em["quantity_unit"].(string)
+				displayQty := strings.TrimSpace(servingSize)
+				if qtyValue > 0 && strings.TrimSpace(qtyUnit) != "" {
+					if qtyValue == float64(int64(qtyValue)) {
+						displayQty = fmt.Sprintf("%d %s", int64(qtyValue), strings.TrimSpace(qtyUnit))
+					} else {
+						displayQty = fmt.Sprintf("%.1f %s", qtyValue, strings.TrimSpace(qtyUnit))
+					}
+				}
 				if displayTime == "" {
 					displayTime = "now"
 				}
-				if strings.TrimSpace(servingSize) == "" {
-					servingSize = "1 serving"
+				if strings.TrimSpace(displayQty) == "" {
+					displayQty = "1 serving"
 				}
-				lines = append(lines, fmt.Sprintf("- %s [%s] at %s: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg", name, servingSize, displayTime, cal, pro, carbs, fat, fiber))
+				lines = append(lines, fmt.Sprintf("- %s [%s] at %s: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg", name, displayQty, displayTime, cal, pro, carbs, fat, fiber))
 			}
 			out := "Logged meals:\n" + strings.Join(lines, "\n")
 			if remaining, ok := m["remaining"].(map[string]any); ok {
@@ -811,7 +864,7 @@ func deterministicToolReply(results []toolExecutionResult) string {
 		}
 	case "modify_logged_meal":
 		if m, ok := r.Response.(map[string]any); ok {
-			if errType, _ := m["error"].(string); errType == "ambiguous_target" {
+			if errType, _ := m["error"].(string); errType == "ambiguous_target" || errType == ErrCodeAmbiguousTarget {
 				out := "I found multiple matching meals. Reply with the option number:\n"
 				if options, ok := m["options"].([]any); ok {
 					for _, opt := range options {
@@ -827,11 +880,11 @@ func deterministicToolReply(results []toolExecutionResult) string {
 			}
 			if errType, _ := m["error"].(string); errType != "" {
 				switch errType {
-				case "meal_not_found":
+				case "meal_not_found", ErrCodeNotFound:
 					return "I couldn't find that meal in today's logs. Reply with the exact dish name from summary, or ask for today's summary first."
-				case "target_dish_and_ingredients_required":
+				case "target_dish_and_ingredients_required", ErrCodeInvalidPayload:
 					return "Please use: '<dish> is actually <new quantity>' so I can update only that item."
-				case "nutrition_estimation_failed":
+				case "nutrition_estimation_failed", ErrCodeEstimateUnavailable:
 					fallthrough
 				case ErrCodeNutritionEstimateFailed:
 					return "I couldn't estimate nutrition for that correction. Please retry with clearer quantity (for example: 'curd is actually 100g')."
@@ -1084,6 +1137,22 @@ func deterministicToolReply(results []toolExecutionResult) string {
 }
 
 func (o *Orchestrator) executeToolAndRespond(s *Session, state *models.ConversationState, intent, userText, toolName string, args map[string]interface{}) bool {
+	traceID, _ := args["trace_id"].(string)
+	actionVal, _ := args["action"].(string)
+	mut := MealMutationV1{
+		TraceID:        traceID,
+		Source:         "orchestrator:deterministic",
+		Action:         MutationAction(strings.ToLower(strings.TrimSpace(actionVal))),
+		MealType:       asString(args["meal_type"]),
+		TargetDishName: asString(args["target_dish_name"]),
+	}
+	if idNum, ok := args["meal_id"].(float64); ok && idNum > 0 {
+		mut.MealID = uint(idNum)
+	}
+	if mut.Action != "" {
+		mut.IdempotencyKey = mutationIdempotencyKey(s.MessageID, mut)
+		args["idempotency_key"] = mut.IdempotencyKey
+	}
 	resp, err := o.Registry.Execute(s, buildToolCall(toolName, args))
 	if err != nil {
 		s.Logger.Warn("Deterministic tool execution failed", "tool", toolName, "error", err, "trace_id", newTraceID())
@@ -1093,8 +1162,7 @@ func (o *Orchestrator) executeToolAndRespond(s *Session, state *models.Conversat
 	if ok, errCode := validateMutatingToolAck(toolName, parsed); !ok {
 		reply := "Something went wrong while saving your request. Nothing was saved. Please retry."
 		o.replySafe(s, reply)
-		updateConversationStateAfterReply(state, intent, reply)
-		o.appendConversationTurn(s.User.ID, userText, reply)
+		o.persistTurnAndStateAtomic(s.User.ID, userText, reply, state, intent, "", reply)
 		s.Logger.Error("Mutating tool acknowledgment validation failed", "tool", toolName, "error_code", errCode, "trace_id", newTraceID())
 		return true
 	}
@@ -1104,9 +1172,13 @@ func (o *Orchestrator) executeToolAndRespond(s *Session, state *models.Conversat
 		reply = "Done."
 	}
 	o.replySafe(s, reply)
-	updateConversationStateAfterTool(state, intent, toolName, resp)
-	o.appendConversationTurn(s.User.ID, userText, reply)
+	o.persistTurnAndStateAtomic(s.User.ID, userText, reply, state, intent, toolName, resp)
 	return true
+}
+
+func asString(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 func validateMutatingToolAck(toolName string, response any) (bool, string) {
@@ -1134,6 +1206,16 @@ func validateMutatingToolAck(toolName string, response any) (bool, string) {
 		}
 	case "modify_logged_meal", "clear_all_meals_today", "set_daily_goal", "update_user_profile", "update_pantry":
 		if okv, exists := m["ok"]; exists && !getBool(okv) {
+			// For meal edits/deletes, some "ok=false" results are expected user-flow outcomes
+			// (for example ambiguous match or meal not found) and should be rendered to the user.
+			if toolName == "modify_logged_meal" {
+				if errType, _ := m["error"].(string); strings.TrimSpace(errType) != "" {
+					switch errType {
+					case "ambiguous_target", "meal_not_found", "target_dish_and_ingredients_required", "nutrition_estimation_failed", ErrCodeAmbiguousTarget, ErrCodeNotFound, ErrCodeInvalidPayload, ErrCodeEstimateUnavailable:
+						return true, ""
+					}
+				}
+			}
 			return false, ErrCodeWriteFailed
 		}
 	}
@@ -1210,9 +1292,11 @@ func inferDeterministicToolCall(text string) (llm.ToolCall, bool) {
 }
 
 func (o *Orchestrator) appendConversationTurn(userID uint, userText, assistantText string) {
-	database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		var conv models.Conversation
-		tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", userID).First(&conv)
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", userID).First(&conv).Error; err != nil && err != gorm.ErrRecordNotFound {
+			return err
+		}
 
 		var history []llm.Message
 		if conv.Messages != "" {
@@ -1231,15 +1315,20 @@ func (o *Orchestrator) appendConversationTurn(userID uint, userText, assistantTe
 		}
 		return tx.Model(&conv).Update("messages", string(raw)).Error
 	})
+	if err != nil {
+		logger.Error("Failed to append conversation turn", "user_id", userID, "error", err)
+	}
 }
 
 func (o *Orchestrator) appendAssistantMessage(userID uint, assistantText string) {
-	database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		if strings.TrimSpace(assistantText) == "" {
 			return nil
 		}
 		var conv models.Conversation
-		tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", userID).First(&conv)
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", userID).First(&conv).Error; err != nil && err != gorm.ErrRecordNotFound {
+			return err
+		}
 
 		var history []llm.Message
 		if conv.Messages != "" {
@@ -1255,6 +1344,58 @@ func (o *Orchestrator) appendAssistantMessage(userID uint, assistantText string)
 		}
 		return tx.Model(&conv).Update("messages", string(raw)).Error
 	})
+	if err != nil {
+		logger.Error("Failed to append assistant message", "user_id", userID, "error", err)
+	}
+}
+
+func (o *Orchestrator) persistTurnAndStateAtomic(userID uint, userText, assistantText string, st *models.ConversationState, intent, toolName, toolResult string) {
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		var conv models.Conversation
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", userID).First(&conv).Error; err != nil && err != gorm.ErrRecordNotFound {
+			return err
+		}
+		var history []llm.Message
+		if conv.Messages != "" {
+			_ = json.Unmarshal([]byte(conv.Messages), &history)
+		}
+		history = append(history, llm.Message{Role: "user", Content: userText})
+		if strings.TrimSpace(assistantText) != "" {
+			history = append(history, llm.Message{Role: "assistant", Content: assistantText})
+		}
+		if len(history) > config.GetWhatsAppHistoryWindow() {
+			history = history[len(history)-config.GetWhatsAppHistoryWindow():]
+		}
+		raw, _ := json.Marshal(history)
+		if conv.ID == 0 {
+			if err := tx.Create(&models.Conversation{UserID: userID, Messages: string(raw)}).Error; err != nil {
+				return err
+			}
+		} else if err := tx.Model(&conv).Update("messages", string(raw)).Error; err != nil {
+			return err
+		}
+
+		if st != nil {
+			st.LastIntent = intent
+			st.LastTool = toolName
+			st.LastToolResult = toolResult
+			st.TurnCount++
+			st.UpdatedAt = time.Now()
+			if err := tx.Model(&models.ConversationState{}).Where("user_id = ?", st.UserID).Updates(map[string]interface{}{
+				"last_intent":      st.LastIntent,
+				"last_tool":        st.LastTool,
+				"last_tool_result": st.LastToolResult,
+				"turn_count":       st.TurnCount,
+				"updated_at":       st.UpdatedAt,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		logger.Error("Failed atomic turn persist", "user_id", userID, "error", err)
+	}
 }
 
 func compactHistoryForLLM(history []llm.Message, max int) []llm.Message {
@@ -1266,6 +1407,10 @@ func compactHistoryForLLM(history []llm.Message, max int) []llm.Message {
 
 func (o *Orchestrator) tryResolvePendingMealSelection(s *Session, st *models.ConversationState, text string) bool {
 	if st == nil || st.PendingMealAction == "" {
+		return false
+	}
+	if shouldInterruptPendingSelection(text) {
+		clearPendingMealSelection(st)
 		return false
 	}
 	ids := getPendingMealIDs(st)
@@ -1280,7 +1425,9 @@ func (o *Orchestrator) tryResolvePendingMealSelection(s *Session, st *models.Con
 		if last < 0 {
 			last = 0
 		}
-		o.replySafe(s, fmt.Sprintf("Please reply with a number between 0 and %d to choose the meal.", last))
+		reply := buildPendingSelectionOptionsReply(s.User.ID, ids, last)
+		o.replySafe(s, reply)
+		o.appendConversationTurn(s.User.ID, text, reply)
 		return true
 	}
 
@@ -1300,7 +1447,9 @@ func (o *Orchestrator) tryResolvePendingMealSelection(s *Session, st *models.Con
 		meta := getPendingSelectionMeta(st)
 		newIngredients, _ := meta["pending_update_ingredients"].(string)
 		if strings.TrimSpace(newIngredients) == "" {
-			o.replySafe(s, "I need the corrected ingredients before I can update this meal. Please resend the correction.")
+			reply := "I need the corrected ingredients before I can update this meal. Please resend the correction."
+			o.replySafe(s, reply)
+			o.appendConversationTurn(s.User.ID, text, reply)
 			return true
 		}
 		args["new_ingredients"] = newIngredients
@@ -1317,9 +1466,57 @@ func (o *Orchestrator) tryResolvePendingMealSelection(s *Session, st *models.Con
 		reply = "Done."
 	}
 	o.replySafe(s, reply)
-	updateConversationStateAfterTool(st, "pending_meal_resolution", "modify_logged_meal", resp)
-	o.appendConversationTurn(s.User.ID, text, reply)
+	o.persistTurnAndStateAtomic(s.User.ID, text, reply, st, "pending_meal_resolution", "modify_logged_meal", resp)
 	return true
+}
+
+func buildPendingSelectionOptionsReply(userID uint, ids []uint, last int) string {
+	if len(ids) == 0 {
+		return "I couldn't find matching meals anymore. Please retry your request."
+	}
+	var meals []models.MealLog
+	_ = database.DB.Where("user_id = ? AND id IN ?", userID, ids).Find(&meals).Error
+	byID := make(map[uint]models.MealLog, len(meals))
+	for _, m := range meals {
+		byID[m.ID] = m
+	}
+	lines := make([]string, 0, len(ids))
+	for i, id := range ids {
+		if m, ok := byID[id]; ok {
+			lines = append(lines, fmt.Sprintf("%d. %s (%s, %s)", i, m.Name, m.MealType, userReadableTime(userID, m.LoggedAt)))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%d. meal id %d", i, id))
+	}
+	return fmt.Sprintf("I found multiple matches. Reply with a number between 0 and %d:\n%s", last, strings.Join(lines, "\n"))
+}
+
+func clearStalePendingSelectionIfNeeded(st *models.ConversationState) {
+	if st == nil || strings.TrimSpace(st.PendingMealAction) == "" {
+		return
+	}
+	const pendingSelectionTTL = 20 * time.Minute
+	if st.UpdatedAt.IsZero() || time.Since(st.UpdatedAt) <= pendingSelectionTTL {
+		return
+	}
+	clearPendingMealSelection(st)
+}
+
+func shouldInterruptPendingSelection(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	if isGreeting(lower) {
+		return true
+	}
+	if strings.Contains(lower, "help") || strings.Contains(lower, "summary") || strings.Contains(lower, "budget") || strings.Contains(lower, "history") {
+		return true
+	}
+	if strings.HasPrefix(lower, "what ") || strings.HasPrefix(lower, "how ") || strings.HasPrefix(lower, "can i ") {
+		return true
+	}
+	return false
 }
 
 func resolveMealChoiceFromText(text string, ids []uint) (uint, bool) {

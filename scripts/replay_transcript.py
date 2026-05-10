@@ -11,13 +11,23 @@ import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
 class Turn:
     user: str
     bot: Optional[str] = None
+
+
+@dataclass
+class TurnAssertion:
+    turn: int
+    intent: Optional[str] = None
+    tool: Optional[str] = None
+    reply_contains: Optional[str] = None
+    quantity_value: Optional[float] = None
+    quantity_unit: Optional[str] = None
 
 
 def parse_transcript(path: str) -> List[Turn]:
@@ -78,6 +88,48 @@ LIMIT 1;
         return "", ""
     ts, msgs = out.split("\t", 1)
     return ts, msgs
+
+
+def get_state_snapshot(db_url: str, phone: str) -> Tuple[str, str]:
+    sql = f"""
+WITH u AS (
+  SELECT user_id FROM user_identities
+  WHERE provider='whatsapp' AND external_id='{phone}'
+  LIMIT 1
+)
+SELECT COALESCE(last_intent,''), COALESCE(last_tool,'')
+FROM conversation_states
+WHERE user_id IN (SELECT user_id FROM u)
+LIMIT 1;
+"""
+    out = run_psql(db_url, sql)
+    if "\t" not in out:
+        return "", ""
+    intent, tool = out.split("\t", 1)
+    return intent, tool
+
+
+def get_latest_meal_quantity(db_url: str, phone: str) -> Tuple[Optional[float], Optional[str]]:
+    sql = f"""
+WITH u AS (
+  SELECT user_id FROM user_identities
+  WHERE provider='whatsapp' AND external_id='{phone}'
+  LIMIT 1
+)
+SELECT quantity_value, quantity_unit
+FROM meal_logs
+WHERE user_id IN (SELECT user_id FROM u)
+ORDER BY id DESC
+LIMIT 1;
+"""
+    out = run_psql(db_url, sql)
+    if "\t" not in out:
+        return None, None
+    v, unit = out.split("\t", 1)
+    try:
+        return float(v), unit.strip()
+    except Exception:
+        return None, unit.strip()
 
 
 def last_assistant_after_user(messages_json: str, user_text: str) -> str:
@@ -196,6 +248,7 @@ def replay(
     check_expected: bool,
     transcript_path: str,
     deterministic_ids: bool,
+    assertions: Dict[int, TurnAssertion],
 ) -> int:
     failures = 0
     for idx, turn in enumerate(turns, start=1):
@@ -234,6 +287,28 @@ def replay(
                 print(f"  MISMATCH[{idx}] expected: {turn.bot}")
                 print(f"  MISMATCH[{idx}] actual  : {bot_reply}")
 
+        assertion = assertions.get(idx)
+        if assertion:
+            if assertion.reply_contains and assertion.reply_contains.lower() not in bot_reply.lower():
+                failures += 1
+                print(f"  ASSERT[{idx}] reply missing fragment: {assertion.reply_contains}")
+            intent, tool = get_state_snapshot(db_url, phone)
+            if assertion.intent and normalize(assertion.intent) != normalize(intent):
+                failures += 1
+                print(f"  ASSERT[{idx}] intent expected={assertion.intent} actual={intent}")
+            if assertion.tool and normalize(assertion.tool) != normalize(tool):
+                failures += 1
+                print(f"  ASSERT[{idx}] tool expected={assertion.tool} actual={tool}")
+            if assertion.quantity_value is not None or assertion.quantity_unit is not None:
+                qv, qu = get_latest_meal_quantity(db_url, phone)
+                if assertion.quantity_value is not None and qv is not None:
+                    if abs(qv - assertion.quantity_value) > 1e-6:
+                        failures += 1
+                        print(f"  ASSERT[{idx}] quantity_value expected={assertion.quantity_value} actual={qv}")
+                if assertion.quantity_unit is not None and normalize(assertion.quantity_unit) != normalize(qu or ""):
+                    failures += 1
+                    print(f"  ASSERT[{idx}] quantity_unit expected={assertion.quantity_unit} actual={qu}")
+
         if delay_sec > 0:
             time.sleep(delay_sec)
 
@@ -252,6 +327,7 @@ def main() -> int:
     ap.add_argument("--check-expected", action="store_true", help="Compare replay reply with transcript bot line.")
     ap.add_argument("--deterministic-ids", action="store_true", help="Use stable message IDs so reruns are deduped.")
     ap.add_argument("--reset-before", action="store_true", help="Clear meal/conversation state for this phone before replay.")
+    ap.add_argument("--assert-spec", default="", help="Path to JSON assertions keyed by turn.")
     args = ap.parse_args()
 
     turns = parse_transcript(args.transcript)
@@ -263,6 +339,26 @@ def main() -> int:
     if not db_url:
         print("DATABASE_URL not found. Pass --db-url or set in env file.")
         return 1
+
+    assertions: Dict[int, TurnAssertion] = {}
+    if args.assert_spec:
+        try:
+            raw = json.load(open(args.assert_spec, encoding="utf-8"))
+            for item in raw.get("turns", []):
+                turn_num = int(item.get("turn", 0))
+                if turn_num <= 0:
+                    continue
+                assertions[turn_num] = TurnAssertion(
+                    turn=turn_num,
+                    intent=item.get("intent"),
+                    tool=item.get("tool"),
+                    reply_contains=item.get("reply_contains"),
+                    quantity_value=item.get("quantity_value"),
+                    quantity_unit=item.get("quantity_unit"),
+                )
+        except Exception as e:
+            print(f"Failed to parse assert spec: {e}")
+            return 1
 
     print(f"Replay turns: {len(turns)}")
     print(f"Base URL: {args.base_url}")
@@ -280,6 +376,7 @@ def main() -> int:
         check_expected=args.check_expected,
         transcript_path=args.transcript,
         deterministic_ids=args.deterministic_ids,
+        assertions=assertions,
     )
     print(f"Replay done. failures={failures}")
     return 1 if failures else 0

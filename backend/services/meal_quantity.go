@@ -14,6 +14,8 @@ type MealQuantity struct {
 }
 
 var mealQuantityPattern = regexp.MustCompile(`(?i)^\s*(\d+(?:\.\d+)?)\s*(x|g|gm|gram|grams|kg|ml|l|litre|liter|cup|cups|tbsp|tablespoon|tablespoons|tsp|teaspoon|teaspoons|piece|pieces|pc|pcs|no|nos|number|numbers|serving|servings|bowl|bowls|plate|plates)?\s*$`)
+var mealQuantityInlinePattern = regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)\s*(x|g|gm|gram|grams|kg|ml|l|litre|liter|cup|cups|tbsp|tablespoon|tablespoons|tsp|teaspoon|teaspoons|piece|pieces|pc|pcs|no|nos|number|numbers|serving|servings|bowl|bowls|plate|plates)\b`)
+var mealQuantityInlineSpacedXPattern = regexp.MustCompile(`(?i)\b(\d+(?:\.\d+)?)\s*x\b`)
 
 func ParseMealQuantity(servingSize string) MealQuantity {
 	defaultQty := MealQuantity{
@@ -46,6 +48,43 @@ func ParseMealQuantity(servingSize string) MealQuantity {
 		BaseValue: baseValue,
 		BaseUnit:  baseUnit,
 	}
+}
+
+// ParseMealQuantityFromText extracts the first explicit quantity mention from free text.
+// Examples: "350g of poha", "2 x eggs", "1 cup oats".
+func ParseMealQuantityFromText(text string) (MealQuantity, bool) {
+	raw := strings.TrimSpace(strings.ToLower(text))
+	if raw == "" {
+		return MealQuantity{}, false
+	}
+	if m := mealQuantityInlineSpacedXPattern.FindStringSubmatch(raw); len(m) == 2 {
+		value, err := strconv.ParseFloat(m[1], 64)
+		if err == nil && value > 0 {
+			baseValue, baseUnit := normalizeMealQuantity(value, "pcs")
+			return MealQuantity{
+				Value:     value,
+				Unit:      "pcs",
+				BaseValue: baseValue,
+				BaseUnit:  baseUnit,
+			}, true
+		}
+	}
+	m := mealQuantityInlinePattern.FindStringSubmatch(raw)
+	if len(m) != 3 {
+		return MealQuantity{}, false
+	}
+	value, err := strconv.ParseFloat(m[1], 64)
+	if err != nil || value <= 0 {
+		return MealQuantity{}, false
+	}
+	unit := canonicalMealUnit(m[2])
+	baseValue, baseUnit := normalizeMealQuantity(value, unit)
+	return MealQuantity{
+		Value:     value,
+		Unit:      unit,
+		BaseValue: baseValue,
+		BaseUnit:  baseUnit,
+	}, true
 }
 
 func canonicalMealUnit(unit string) string {

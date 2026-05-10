@@ -153,6 +153,19 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 	action, _ := args["action"].(string)
 	targetDish, _ := args["target_dish_name"].(string)
 	newIngredients, _ := args["new_ingredients"].(string)
+	traceID, _ := args["trace_id"].(string)
+	mealID := uint(0)
+	if idNum, ok := args["meal_id"].(float64); ok && idNum > 0 {
+		mealID = uint(idNum)
+	}
+	mut := MealMutationV1{
+		TraceID:        traceID,
+		Source:         "tool:modify_logged_meal",
+		Action:         MutationAction(strings.ToLower(strings.TrimSpace(action))),
+		MealType:       mealType,
+		TargetDishName: targetDish,
+		MealID:         mealID,
+	}
 
 	nowLocal := nowForUser(s.User.ID)
 	todayStart, todayEnd := dayWindow(nowLocal)
@@ -163,25 +176,36 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 
 	switch action {
 	case "delete":
+		if err := mut.Validate(); err != nil {
+			return jsonString(map[string]any{"ok": false, "error": ErrCodeInvalidPayload}), nil
+		}
 		return deleteMealsTransactional(s, candidates, mealType, targetDish, args)
 
 	case "update":
+		canonical := normalizeMealInputV1(traceID, "tool:modify_logged_meal", newIngredients, targetDish, newIngredients, mealType, "")
+		mut.Input = &canonical
+		if err := mut.Validate(); err != nil {
+			return jsonString(map[string]any{"ok": false, "error": ErrCodeInvalidPayload}), nil
+		}
 		return updateMealTransactional(s, ns, candidates, mealType, targetDish, newIngredients, args)
 
 	case "add":
 		if newIngredients == "" {
 			return `{"ok":false,"error":"new_ingredients_required"}`, nil
 		}
-		dishName := targetDish
-		dishName = canonicalDishName(dishName, mealType, newIngredients)
+		canonical := normalizeMealInputV1(traceID, "tool:modify_logged_meal", newIngredients, targetDish, newIngredients, mealType, "")
+		mut.Input = &canonical
+		if err := mut.Validate(); err != nil {
+			return jsonString(map[string]any{"ok": false, "error": ErrCodeInvalidPayload}), nil
+		}
 		estimated, err := ns.EstimateNutritionFromQuery(s.User.ID, newIngredients)
 		if err != nil || estimated == nil {
-			return `{"ok":false,"error":"nutrition_estimation_failed"}`, nil
+			return jsonString(map[string]any{"ok": false, "error": ErrCodeEstimateUnavailable}), nil
 		}
 		newMeal := models.MealLog{
 			UserID:      s.User.ID,
-			Name:        dishName,
-			MealType:    mealType,
+			Name:        canonicalDishName(canonical.ItemName, mealType, newIngredients),
+			MealType:    canonical.MealType,
 			Ingredients: newIngredients,
 			Calories:    estimated.Calories,
 			Protein:     estimated.Protein,
@@ -191,14 +215,16 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 			ServingSize: estimated.ServingSize,
 			LoggedAt:    nowForUser(s.User.ID),
 		}
-		qty := services.ParseMealQuantity(estimated.ServingSize)
-		newMeal.QuantityValue = qty.Value
-		newMeal.QuantityUnit = qty.Unit
-		newMeal.QuantityBaseValue = qty.BaseValue
-		newMeal.QuantityBaseUnit = qty.BaseUnit
+		if canonical.QuantityValue <= 0 || strings.TrimSpace(canonical.QuantityUnit) == "" {
+			canonical = normalizeMealInputV1(traceID, "tool:modify_logged_meal", newIngredients, targetDish, newIngredients, mealType, estimated.ServingSize)
+		}
+		newMeal.QuantityValue = canonical.QuantityValue
+		newMeal.QuantityUnit = canonical.QuantityUnit
+		newMeal.QuantityBaseValue = canonical.QuantityBaseValue
+		newMeal.QuantityBaseUnit = canonical.QuantityBaseUnit
 		database.DB.Create(&newMeal)
 		syncMealComponents(s.User.ID, newMeal.ID, newIngredients, estimated)
-		return jsonString(map[string]any{"ok": true, "action": "add", "meal_id": newMeal.ID, "dish_name": dishName, "meal_type": mealType, "calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber, "serving_size": estimated.ServingSize}), nil
+		return jsonString(map[string]any{"ok": true, "action": "add", "meal_id": newMeal.ID, "dish_name": newMeal.Name, "meal_type": newMeal.MealType, "calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber, "serving_size": estimated.ServingSize, "quantity_value": newMeal.QuantityValue, "quantity_unit": newMeal.QuantityUnit}), nil
 	}
 
 	return `{"ok":false,"error":"unknown_action"}`, nil
@@ -468,7 +494,13 @@ func updateMealTransactional(s *Session, ns *services.NutritionService, candidat
 			updates["fiber"] = estimated.Fiber
 			estimatedServingSize = estimated.ServingSize
 			updates["serving_size"] = estimatedServingSize
-			qty := services.ParseMealQuantity(estimatedServingSize)
+			canonical := normalizeMealInputV1("", "tool:modify_logged_meal", newIngredients, targetDish, newIngredients, mealType, estimatedServingSize)
+			qty := services.MealQuantity{
+				Value:     canonical.QuantityValue,
+				Unit:      canonical.QuantityUnit,
+				BaseValue: canonical.QuantityBaseValue,
+				BaseUnit:  canonical.QuantityBaseUnit,
+			}
 			updates["quantity_value"] = qty.Value
 			updates["quantity_unit"] = qty.Unit
 			updates["quantity_base_value"] = qty.BaseValue

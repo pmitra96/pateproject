@@ -1,0 +1,12 @@
+{
+  "turns": [
+    {
+      "turn": 6,
+      "intent": "log_meals",
+      "tool": "log_meals",
+      "reply_contains": "Logged meals",
+      "quantity_value": 350,
+      "quantity_unit": "g"
+    }
+  ]
+}

@@ -171,3 +171,24 @@ func TestParseDeterministicCRUD_CleansAddToMealSuffix(t *testing.T) {
 		t.Fatalf("unexpected dish name: %#v", meals[0]["dish_name"])
 	}
 }
+
+func TestParseDeterministicCRUD_PreservesInlineQuantityForMealLog(t *testing.T) {
+	msg := "i had 350g of aloo mutter poha for breakfast"
+	decision, ok := parseDeterministicCRUD(msg)
+	if !ok {
+		t.Fatalf("expected deterministic parse")
+	}
+	if decision.ToolName != "log_meals" {
+		t.Fatalf("expected log_meals, got %q", decision.ToolName)
+	}
+	meals, ok := decision.Args["meals"].([]map[string]interface{})
+	if !ok || len(meals) != 1 {
+		t.Fatalf("expected single meal payload")
+	}
+	if meals[0]["ingredients"] != "350g of aloo mutter poha" {
+		t.Fatalf("unexpected ingredients payload: %#v", meals[0]["ingredients"])
+	}
+	if meals[0]["dish_name"] != "Aloo Mutter Poha" {
+		t.Fatalf("unexpected dish name: %#v", meals[0]["dish_name"])
+	}
+}

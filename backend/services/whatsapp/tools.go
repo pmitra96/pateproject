@@ -22,13 +22,11 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 	}
 
 	type pendingMealLog struct {
-		DishName     string
-		Ingredients  string
-		MealType     string
-		Estimated    *services.FoodEstimate
-		ControlMode  string
-		LoggedAt     time.Time
-		QuantityInfo services.MealQuantity
+		Canonical   MealInputV1
+		Ingredients string
+		Estimated   *services.FoodEstimate
+		ControlMode string
+		LoggedAt    time.Time
 	}
 	pending := make([]pendingMealLog, 0, len(meals))
 
@@ -44,21 +42,23 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 		dishName, _ := mealData["dish_name"].(string)
 		ingredients, _ := mealData["ingredients"].(string)
 		mealType, _ := mealData["meal_type"].(string)
-		dishName = canonicalDishName(dishName, mealType, ingredients)
+		rawText, _ := mealData["raw_text"].(string)
+		traceID, _ := mealData["trace_id"].(string)
 
 		estimated, err := ns.EstimateNutritionFromQuery(s.User.ID, ingredients)
 		if err != nil || estimated == nil {
-			return jsonString(map[string]any{"ok": false, "error": ErrCodeNutritionEstimateFailed, "dish_name": dishName}), nil
+			return jsonString(map[string]any{"ok": false, "error": ErrCodeEstimateUnavailable, "dish_name": dishName}), nil
 		}
-		qty := services.ParseMealQuantity(estimated.ServingSize)
+		canonical := normalizeMealInputV1(traceID, "tool:log_meals", rawText, dishName, ingredients, mealType, estimated.ServingSize)
+		if err := canonical.Validate(true); err != nil {
+			return jsonString(map[string]any{"ok": false, "error": ErrCodeInvalidPayload, "dish_name": dishName}), nil
+		}
 		pending = append(pending, pendingMealLog{
-			DishName:     dishName,
-			Ingredients:  ingredients,
-			MealType:     mealType,
-			Estimated:    estimated,
-			ControlMode:  controlMode,
-			LoggedAt:     now,
-			QuantityInfo: qty,
+			Canonical:   canonical,
+			Ingredients: ingredients,
+			Estimated:   estimated,
+			ControlMode: controlMode,
+			LoggedAt:    now,
 		})
 	}
 
@@ -72,8 +72,8 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 			}
 			mealLog := models.MealLog{
 				UserID:           s.User.ID,
-				Name:             pm.DishName,
-				MealType:         pm.MealType,
+				Name:             canonicalDishName(pm.Canonical.ItemName, pm.Canonical.MealType, pm.Ingredients),
+				MealType:         pm.Canonical.MealType,
 				Ingredients:      pm.Ingredients,
 				Calories:         estimated.Calories,
 				Protein:          estimated.Protein,
@@ -87,10 +87,10 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 			if err := tx.Create(&mealLog).Error; err != nil {
 				return err
 			}
-			mealLog.QuantityValue = pm.QuantityInfo.Value
-			mealLog.QuantityUnit = pm.QuantityInfo.Unit
-			mealLog.QuantityBaseValue = pm.QuantityInfo.BaseValue
-			mealLog.QuantityBaseUnit = pm.QuantityInfo.BaseUnit
+			mealLog.QuantityValue = pm.Canonical.QuantityValue
+			mealLog.QuantityUnit = pm.Canonical.QuantityUnit
+			mealLog.QuantityBaseValue = pm.Canonical.QuantityBaseValue
+			mealLog.QuantityBaseUnit = pm.Canonical.QuantityBaseUnit
 			if err := tx.Model(&mealLog).Updates(map[string]any{
 				"quantity_value":      mealLog.QuantityValue,
 				"quantity_unit":       mealLog.QuantityUnit,
@@ -106,11 +106,15 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 			syncMealComponents(s.User.ID, mealLog.ID, pm.Ingredients, estimated)
 			createdIDs = append(createdIDs, mealLog.ID)
 			entries = append(entries, map[string]any{
-				"meal_id": mealLog.ID, "dish_name": pm.DishName, "meal_type": pm.MealType, "ok": true,
+				"meal_id": mealLog.ID, "dish_name": mealLog.Name, "meal_type": mealLog.MealType, "ok": true,
 				"calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber,
-				"serving_size": estimated.ServingSize,
-				"logged_at":    mealLog.LoggedAt.Format(time.RFC3339),
-				"display_time": userReadableTime(s.User.ID, mealLog.LoggedAt),
+				"serving_size":       estimated.ServingSize,
+				"quantity_value":     mealLog.QuantityValue,
+				"quantity_unit":      mealLog.QuantityUnit,
+				"quantity_base_value": mealLog.QuantityBaseValue,
+				"quantity_base_unit":  mealLog.QuantityBaseUnit,
+				"logged_at":          mealLog.LoggedAt.Format(time.RFC3339),
+				"display_time":       userReadableTime(s.User.ID, mealLog.LoggedAt),
 			})
 		}
 		return nil

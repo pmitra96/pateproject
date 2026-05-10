@@ -105,6 +105,8 @@ func ambiguousMealsPayload(meals []models.MealLog, reason string) map[string]any
 	return map[string]any{
 		"ok":      false,
 		"error":   reason,
+		"error_code": ErrCodeAmbiguousTarget,
+		"reason":  reason,
 		"message": "Multiple matching meals found. Reply with the option number (starting from 0).",
 		"options": options,
 	}
