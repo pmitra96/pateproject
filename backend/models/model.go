@@ -155,6 +155,11 @@ type MealLog struct {
 	Carbs              float64        `gorm:"default:0" json:"carbs"`
 	Fat                float64        `gorm:"default:0" json:"fat"`
 	Fiber              float64        `gorm:"default:0" json:"fiber"`
+	ServingSize        string         `gorm:"size:64" json:"serving_size"` // e.g. "100g", "200ml", "1 bowl"
+	QuantityValue      float64        `gorm:"default:1" json:"quantity_value"`
+	QuantityUnit       string         `gorm:"size:16;default:'pcs'" json:"quantity_unit"`
+	QuantityBaseValue  float64        `gorm:"default:1" json:"quantity_base_value"`
+	QuantityBaseUnit   string         `gorm:"size:16;default:'pcs'" json:"quantity_base_unit"`
 	Ingredients        string         `gorm:"type:text" json:"ingredients"` // JSON array of ingredients with quantities
 	LoggedAt           time.Time      `json:"logged_at"`
 	WasSystemSuggested bool           `gorm:"default:false" json:"was_system_suggested"`

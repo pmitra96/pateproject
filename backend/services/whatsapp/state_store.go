@@ -29,20 +29,14 @@ func updateConversationStateAfterReply(st *models.ConversationState, intent, rep
 	st.LastIntent = intent
 	st.LastTool = ""
 	st.LastToolResult = reply
-	st.PendingMealAction = ""
-	st.PendingMealOptions = ""
-	st.PendingSlots = ""
 	st.TurnCount++
 	st.UpdatedAt = time.Now()
 	database.DB.Model(&models.ConversationState{}).Where("user_id = ?", st.UserID).Updates(map[string]interface{}{
-		"last_intent":          st.LastIntent,
-		"last_tool":            st.LastTool,
-		"last_tool_result":     st.LastToolResult,
-		"pending_meal_action":  st.PendingMealAction,
-		"pending_meal_options": st.PendingMealOptions,
-		"pending_slots":        st.PendingSlots,
-		"turn_count":           st.TurnCount,
-		"updated_at":           st.UpdatedAt,
+		"last_intent":      st.LastIntent,
+		"last_tool":        st.LastTool,
+		"last_tool_result": st.LastToolResult,
+		"turn_count":       st.TurnCount,
+		"updated_at":       st.UpdatedAt,
 	})
 }
 
@@ -53,20 +47,14 @@ func updateConversationStateAfterTool(st *models.ConversationState, intent, tool
 	st.LastIntent = intent
 	st.LastTool = toolName
 	st.LastToolResult = toolResult
-	st.PendingMealAction = ""
-	st.PendingMealOptions = ""
-	st.PendingSlots = ""
 	st.TurnCount++
 	st.UpdatedAt = time.Now()
 	database.DB.Model(&models.ConversationState{}).Where("user_id = ?", st.UserID).Updates(map[string]interface{}{
-		"last_intent":          st.LastIntent,
-		"last_tool":            st.LastTool,
-		"last_tool_result":     st.LastToolResult,
-		"pending_meal_action":  st.PendingMealAction,
-		"pending_meal_options": st.PendingMealOptions,
-		"pending_slots":        st.PendingSlots,
-		"turn_count":           st.TurnCount,
-		"updated_at":           st.UpdatedAt,
+		"last_intent":      st.LastIntent,
+		"last_tool":        st.LastTool,
+		"last_tool_result": st.LastToolResult,
+		"turn_count":       st.TurnCount,
+		"updated_at":       st.UpdatedAt,
 	})
 }
 
@@ -125,4 +113,14 @@ func getPendingSelectionMeta(st *models.ConversationState) map[string]any {
 		return map[string]any{}
 	}
 	return meta
+}
+
+func updateConversationStateMeta(st *models.ConversationState) {
+	if st == nil {
+		return
+	}
+	database.DB.Model(&models.ConversationState{}).Where("user_id = ?", st.UserID).Updates(map[string]interface{}{
+		"pending_slots": st.PendingSlots,
+		"updated_at":    st.UpdatedAt,
+	})
 }
