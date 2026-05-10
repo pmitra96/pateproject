@@ -1,10 +1,8 @@
 package whatsapp
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -33,7 +31,6 @@ func NewOrchestrator() *Orchestrator {
 	r.Register("log_meals", HandleLogMeals)
 	r.Register("set_daily_goal", HandleSetGoal)
 	r.Register("ask_advice", HandleAskAdvice)
-	r.Register("get_food_nutrition", HandleGetFoodNutrition)
 	r.Register("get_leftover_budget", HandleGetBudget)
 	r.Register("update_user_profile", HandleUpdateProfile)
 	r.Register("update_pantry", HandleUpdatePantry)
@@ -89,96 +86,8 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	if handled := o.tryResolvePendingMealSelection(s, state, text); handled {
 		return
 	}
-	traceID := newTraceID()
-	if toolName, toolArgs, handled, pendingReply := resolvePendingActionChoice(state, s.MessageID, text); handled {
-		if pendingReply != "" {
-			o.replySafe(s, pendingReply)
-			updateConversationStateAfterReply(state, "pending_action", pendingReply)
-			o.appendConversationTurn(s.User.ID, text, pendingReply)
-			return
-		}
-		if o.executeToolAndRespond(s, state, "pending_action_execute", text, toolName, toolArgs) {
-			return
-		}
-	}
-
-	overridden, hasOverride := classifyIntentOverrides(text)
-	llmClient := llm.NewClient()
-	intentResult := overridden
-	runClassifier := hasOverride || looksLikeMealCRUD(strings.ToLower(strings.TrimSpace(text)))
-	if runClassifier && !hasOverride {
-		classifier := newIntentClassifier(llmClient)
-		classified, err := classifier.Classify(text, userContext, traceID)
-		if err == nil {
-			intentResult = classified
-		} else {
-			s.Logger.Warn("Intent classifier failed", "error", err, "trace_id", traceID)
-		}
-	}
-	if runClassifier && intentResult.Intent != "" && intentResult.Intent != IntentFallback {
-		s.Logger.Info("Intent classification", "intent", intentResult.Intent, "confidence", intentResult.Confidence, "trace_id", traceID)
-		policy := decideIntentPolicy(intentResult)
-		switch policy.Decision {
-		case DecisionExecute:
-			reply := ""
-			toolName, args, directReply, ok := mapIntentToExecution(intentResult)
-			if directReply != "" {
-				reply = directReply
-				o.replySafe(s, reply)
-				updateConversationStateAfterReply(state, string(intentResult.Intent), reply)
-				o.appendConversationTurn(s.User.ID, text, reply)
-				return
-			}
-			if ok && toolName != "" {
-				if o.executeToolAndRespond(s, state, string(intentResult.Intent), text, toolName, args) {
-					return
-				}
-			}
-			// fallthrough to existing router/LLM if no safe deterministic mapping
-		case DecisionConfirm:
-			if intentResult.Intent == IntentDeleteMeal {
-				scope, _ := intentResult.Entities["scope"].(string)
-				if scope == "meal_type" {
-					mealType, _ := intentResult.Entities["meal_type"].(string)
-					p := newPendingAction("delete_meal", "delete_scope_choice", map[string]any{"meal_type": mealType}, "", nil, traceID, s.MessageID)
-					setPendingAction(state, p)
-					msg := "Do you want to delete all " + strings.ToLower(mealType) + " entries today, or just one item?"
-					o.replySafe(s, msg)
-					updateConversationStateAfterReply(state, "confirm_delete_scope", msg)
-					o.appendConversationTurn(s.User.ID, text, msg)
-					return
-				}
-				if scope == "all_today" {
-					p := newPendingAction("clear_day", "confirmation", map[string]any{"scope": "all_today"}, "clear_all_meals_today", map[string]any{}, traceID, s.MessageID)
-					setPendingAction(state, p)
-					msg := "Please confirm: clear all meals logged today? (yes/no)"
-					o.replySafe(s, msg)
-					updateConversationStateAfterReply(state, "confirm_clear_day", msg)
-					o.appendConversationTurn(s.User.ID, text, msg)
-					return
-				}
-				if scope == "single_id" {
-					raw, _ := intentResult.Entities["meal_id_raw"].(string)
-					if mealID, err := strconv.Atoi(raw); err == nil {
-						p := newPendingAction("delete_meal", "confirmation", map[string]any{"scope": "single_id"}, "modify_logged_meal", map[string]any{"action": "delete", "meal_id": float64(mealID)}, traceID, s.MessageID)
-						setPendingAction(state, p)
-						msg := "Please confirm delete for meal id " + raw + ". (yes/no)"
-						o.replySafe(s, msg)
-						updateConversationStateAfterReply(state, "confirm_delete_id", msg)
-						o.appendConversationTurn(s.User.ID, text, msg)
-						return
-					}
-				}
-			}
-			// If we cannot produce a concrete pending delete command, fall through to legacy deterministic/LLM paths.
-		}
-	}
-
 	decision := routeWhatsAppMessage(text, state)
 	s.Logger.Info("V2 route decision", "intent", decision.Intent, "tool", decision.ToolName, "needs_llm", decision.NeedsLLM)
-	if decision.Intent == "crud_format_clarification" {
-		decision.NeedsLLM = true
-	}
 	if !decision.NeedsLLM {
 		if decision.DirectReply != "" {
 			o.replySafe(s, decision.DirectReply)
@@ -187,14 +96,25 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 			return
 		}
 		if decision.ToolName != "" {
-			if o.executeToolAndRespond(s, state, decision.Intent, text, decision.ToolName, decision.Args) {
+			toolCall := buildToolCall(decision.ToolName, decision.Args)
+			resp, err := o.Registry.Execute(s, toolCall)
+			if err == nil {
+				result := []toolExecutionResult{{ToolName: decision.ToolName, Response: parseToolResponse(resp)}}
+				reply := deterministicToolReply(result)
+				if reply == "" || reply == "Done." {
+					reply = "Done."
+				}
+				o.replySafe(s, reply)
+				updateConversationStateAfterTool(state, decision.Intent, decision.ToolName, resp)
+				o.appendConversationTurn(s.User.ID, text, reply)
 				return
 			}
-			s.Logger.Warn("Deterministic route tool execution failed", "tool", decision.ToolName)
+			s.Logger.Warn("Deterministic route tool execution failed", "tool", decision.ToolName, "error", err)
 		}
 	}
 
 	// 5. Call LLM
+	llmClient := llm.NewClient()
 	startTime := time.Now()
 	history = compactHistoryForLLM(history, 12)
 	assistantMsg, usage, err := llmClient.ProcessWhatsAppConversation(text, imageBase64, history, userContext)
@@ -738,14 +658,10 @@ func deterministicToolReply(results []toolExecutionResult) string {
 				fat := getFloat(em["fat"])
 				fiber := getFloat(em["fiber"])
 				displayTime, _ := em["display_time"].(string)
-				servingSize, _ := em["serving_size"].(string)
 				if displayTime == "" {
 					displayTime = "now"
 				}
-				if strings.TrimSpace(servingSize) == "" {
-					servingSize = "1 serving"
-				}
-				lines = append(lines, fmt.Sprintf("- %s [%s] at %s: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg", name, servingSize, displayTime, cal, pro, carbs, fat, fiber))
+				lines = append(lines, fmt.Sprintf("- %s at %s: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg", name, displayTime, cal, pro, carbs, fat, fiber))
 			}
 			out := "Logged meals:\n" + strings.Join(lines, "\n")
 			if remaining, ok := m["remaining"].(map[string]any); ok {
@@ -825,20 +741,6 @@ func deterministicToolReply(results []toolExecutionResult) string {
 				}
 				return strings.TrimSpace(out)
 			}
-			if errType, _ := m["error"].(string); errType != "" {
-				switch errType {
-				case "meal_not_found":
-					return "I couldn't find that meal in today's logs. Reply with the exact dish name from summary, or ask for today's summary first."
-				case "target_dish_and_ingredients_required":
-					return "Please use: '<dish> is actually <new quantity>' so I can update only that item."
-				case "nutrition_estimation_failed":
-					fallthrough
-				case ErrCodeNutritionEstimateFailed:
-					return "I couldn't estimate nutrition for that correction. Please retry with clearer quantity (for example: 'curd is actually 100g')."
-				default:
-					return "I couldn't apply that meal change. Please retry using 'delete <dish>' or '<dish> is actually <new quantity>'."
-				}
-			}
 			if msg, _ := m["message"].(string); strings.TrimSpace(msg) != "" {
 				return strings.TrimSpace(msg)
 			}
@@ -861,12 +763,8 @@ func deterministicToolReply(results []toolExecutionResult) string {
 					carbs := getFloat(m["carbs"])
 					fat := getFloat(m["fat"])
 					fiber := getFloat(m["fiber"])
-					servingSize, _ := m["serving_size"].(string)
-					if strings.TrimSpace(servingSize) == "" {
-						servingSize = "1 serving"
-					}
 					if cal > 0 || pro > 0 || carbs > 0 || fat > 0 || fiber > 0 {
-						return fmt.Sprintf("Updated %s [%s]: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg.", dish, servingSize, cal, pro, carbs, fat, fiber)
+						return fmt.Sprintf("Updated %s: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg.", dish, cal, pro, carbs, fat, fiber)
 					}
 					return fmt.Sprintf("Updated %s.", dish)
 				case "add":
@@ -875,12 +773,8 @@ func deterministicToolReply(results []toolExecutionResult) string {
 					carbs := getFloat(m["carbs"])
 					fat := getFloat(m["fat"])
 					fiber := getFloat(m["fiber"])
-					servingSize, _ := m["serving_size"].(string)
-					if strings.TrimSpace(servingSize) == "" {
-						servingSize = "1 serving"
-					}
 					if mealType != "" {
-						return fmt.Sprintf("Added %s [%s] to %s: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg.", dish, servingSize, mealType, cal, pro, carbs, fat, fiber)
+						return fmt.Sprintf("Added %s to %s: %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg.", dish, mealType, cal, pro, carbs, fat, fiber)
 					}
 					return fmt.Sprintf("Added %s.", dish)
 				}
@@ -922,27 +816,6 @@ func deterministicToolReply(results []toolExecutionResult) string {
 				return strings.TrimSpace(decision) + " " + strings.TrimSpace(reason)
 			}
 			return strings.TrimSpace(decision)
-		}
-	case "get_food_nutrition":
-		if m, ok := r.Response.(map[string]any); ok {
-			if !getBool(m["ok"]) {
-				return "I couldn't estimate nutrition for that item. Please retry with quantity, like '100g carrot' or '1 carrot'."
-			}
-			food, _ := m["food_description"].(string)
-			estimated, _ := m["estimated"].(map[string]any)
-			cal := getFloat(estimated["calories"])
-			pro := getFloat(estimated["protein"])
-			carbs := getFloat(estimated["carbs"])
-			fat := getFloat(estimated["fat"])
-			fiber := getFloat(estimated["fiber"])
-			servingSize, _ := estimated["serving_size"].(string)
-			if strings.TrimSpace(servingSize) == "" {
-				servingSize = "1 serving"
-			}
-			if strings.TrimSpace(food) == "" {
-				food = "that food"
-			}
-			return fmt.Sprintf("Estimated nutrition for %s (%s): %.0f kcal, P %.1fg, C %.1fg, F %.1fg, Fi %.1fg.", food, servingSize, cal, pro, carbs, fat, fiber)
 		}
 	case "update_user_profile":
 		return "Profile updated."
@@ -1081,63 +954,6 @@ func deterministicToolReply(results []toolExecutionResult) string {
 		}
 	}
 	return "Done."
-}
-
-func (o *Orchestrator) executeToolAndRespond(s *Session, state *models.ConversationState, intent, userText, toolName string, args map[string]interface{}) bool {
-	resp, err := o.Registry.Execute(s, buildToolCall(toolName, args))
-	if err != nil {
-		s.Logger.Warn("Deterministic tool execution failed", "tool", toolName, "error", err, "trace_id", newTraceID())
-		return false
-	}
-	parsed := parseToolResponse(resp)
-	if ok, errCode := validateMutatingToolAck(toolName, parsed); !ok {
-		reply := "Something went wrong while saving your request. Nothing was saved. Please retry."
-		o.replySafe(s, reply)
-		updateConversationStateAfterReply(state, intent, reply)
-		o.appendConversationTurn(s.User.ID, userText, reply)
-		s.Logger.Error("Mutating tool acknowledgment validation failed", "tool", toolName, "error_code", errCode, "trace_id", newTraceID())
-		return true
-	}
-	result := []toolExecutionResult{{ToolName: toolName, Response: parsed}}
-	reply := deterministicToolReply(result)
-	if reply == "" || reply == "Done." {
-		reply = "Done."
-	}
-	o.replySafe(s, reply)
-	updateConversationStateAfterTool(state, intent, toolName, resp)
-	o.appendConversationTurn(s.User.ID, userText, reply)
-	return true
-}
-
-func validateMutatingToolAck(toolName string, response any) (bool, string) {
-	m, ok := response.(map[string]any)
-	if !ok {
-		return true, ""
-	}
-	switch toolName {
-	case "log_meals":
-		if okv, _ := m["ok"].(bool); !okv {
-			return false, ErrCodeWriteFailed
-		}
-		entries, _ := m["logged_meals"].([]any)
-		if len(entries) == 0 {
-			return false, ErrCodeNoMealsLogged
-		}
-		for _, entry := range entries {
-			em, _ := entry.(map[string]any)
-			if okv, _ := em["ok"].(bool); !okv {
-				return false, ErrCodeWriteFailed
-			}
-			if getFloat(em["meal_id"]) <= 0 {
-				return false, ErrCodeReadbackFailed
-			}
-		}
-	case "modify_logged_meal", "clear_all_meals_today", "set_daily_goal", "update_user_profile", "update_pantry":
-		if okv, exists := m["ok"]; exists && !getBool(okv) {
-			return false, ErrCodeWriteFailed
-		}
-	}
-	return true, ""
 }
 
 func getCount(v any) int {
@@ -1445,39 +1261,4 @@ func (o *Orchestrator) ensureGoalSetFromProfile(s *Session) (string, bool) {
 	}
 	resp, _ := HandleSetGoal(s, map[string]interface{}{"calories": float64(target)})
 	return resp, true
-}
-
-func newTraceID() string {
-	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
-	var out strings.Builder
-	for i := 0; i < 12; i++ {
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(alphabet))))
-		if err != nil {
-			out.WriteByte('0')
-			continue
-		}
-		out.WriteByte(alphabet[n.Int64()])
-	}
-	return out.String()
-}
-
-func mapIntentToExecution(result IntentResult) (toolName string, args map[string]any, directReply string, ok bool) {
-	switch result.Intent {
-	case IntentHelp:
-		return "", nil, "I can help you log meals, get today's summary, check budget, and update goals/profile.", true
-	case IntentGetSummary:
-		return "get_daily_summary", map[string]any{}, "", true
-	case IntentGetBudget:
-		return "get_leftover_budget", map[string]any{}, "", true
-	case IntentDeleteMeal:
-		scope, _ := result.Entities["scope"].(string)
-		if scope == "single_id" {
-			raw, _ := result.Entities["meal_id_raw"].(string)
-			if mealID, err := strconv.Atoi(raw); err == nil {
-				return "modify_logged_meal", map[string]any{"action": "delete", "meal_id": float64(mealID)}, "", true
-			}
-		}
-		return "", nil, "", false
-	}
-	return "", nil, "", false
 }

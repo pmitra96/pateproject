@@ -9,16 +9,13 @@ import (
 var (
 	reMealType = regexp.MustCompile(`(?i)\b(breakfast|lunch|dinner|snack)\b`)
 	reBullet   = regexp.MustCompile(`^\s*(?:\d+[\)\.\-:]?\s*|[-*]\s*)`)
-	reQtyOnly  = regexp.MustCompile(`(?i)^\s*(?:half|quarter|\d+(?:\.\d+)?)\s*(?:x|g|gm|kg|ml|l|tsp|tbsp|cup|cups|slice|slices|piece|pieces|pc|pcs|no|nos|number|numbers|serving|servings)?\s*$`)
+	reQtyOnly  = regexp.MustCompile(`(?i)^\s*(?:half|quarter|\d+(?:\.\d+)?)\s*(?:g|gm|kg|ml|l|tsp|tbsp|cup|cups|slice|slices|piece|pieces|serving|servings)?\s*$`)
 )
 
 func parseDeterministicCRUD(text string) (RouteDecision, bool) {
 	raw := strings.TrimSpace(text)
 	lower := strings.ToLower(raw)
 	if raw == "" {
-		return RouteDecision{}, false
-	}
-	if isNutritionQuestion(lower) || isCanIEatQuestion(lower) {
 		return RouteDecision{}, false
 	}
 	if strings.Contains(lower, "pantry") || strings.Contains(lower, "recipe") {
@@ -132,9 +129,6 @@ func isUpdateIntent(lower string) bool {
 }
 
 func isMealLogIntent(lower string) bool {
-	if looksLikeQuestion(lower) {
-		return false
-	}
 	return strings.Contains(lower, " i had") ||
 		strings.HasPrefix(lower, "had ") ||
 		strings.HasPrefix(lower, "ate ") ||
@@ -144,25 +138,6 @@ func isMealLogIntent(lower string) bool {
 		strings.Contains(lower, " for dinner") ||
 		strings.Contains(lower, " for snack") ||
 		strings.HasPrefix(lower, "add ")
-}
-
-func looksLikeQuestion(lower string) bool {
-	if strings.Contains(lower, "?") {
-		return true
-	}
-	return strings.HasPrefix(lower, "what ") ||
-		strings.HasPrefix(lower, "should ") ||
-		strings.HasPrefix(lower, "can ") ||
-		strings.HasPrefix(lower, "could ") ||
-		strings.HasPrefix(lower, "would ") ||
-		strings.HasPrefix(lower, "will ") ||
-		strings.HasPrefix(lower, "do ") ||
-		strings.HasPrefix(lower, "did ") ||
-		strings.HasPrefix(lower, "is ") ||
-		strings.HasPrefix(lower, "are ") ||
-		strings.HasPrefix(lower, "how ") ||
-		strings.HasPrefix(lower, "when ") ||
-		strings.HasPrefix(lower, "why ")
 }
 
 func detectMealType(text string) string {
@@ -229,7 +204,7 @@ func extractUpdateTargetAndReplacement(text, mealType string) (string, string) {
 		return target, coerceReplacement(target, repl)
 	}
 
-	reMakeQty := regexp.MustCompile(`(?i)^(?:please\s+)?make\s+(.+?)\s+((?:half|quarter|\d+(?:\.\d+)?)\s*(?:x|g|gm|kg|ml|l|tsp|tbsp|cup|cups|slice|slices|piece|pieces|pc|pcs|no|nos|number|numbers|serving|servings).*)$`)
+	reMakeQty := regexp.MustCompile(`(?i)^(?:please\s+)?make\s+(.+?)\s+((?:half|quarter|\d+(?:\.\d+)?)\s*(?:g|gm|kg|ml|l|tsp|tbsp|cup|cups|slice|slices|piece|pieces|serving|servings).*)$`)
 	if m := reMakeQty.FindStringSubmatch(raw); len(m) == 3 {
 		target := cleanFoodPhrase(m[1], mealType)
 		repl := cleanFoodPhrase(m[2], mealType)
@@ -277,7 +252,7 @@ func extractUpdateTargetAndReplacement(text, mealType string) (string, string) {
 
 func inferTargetFromReplacement(replacement string) string {
 	base := strings.TrimSpace(replacement)
-	reQtyPrefix := regexp.MustCompile(`(?i)^\s*(?:about|around)?\s*(?:half|quarter|\d+(?:\.\d+)?)\s*(?:x|g|gm|kg|ml|l|tsp|tbsp|cup|cups|slice|slices|piece|pieces|pc|pcs|no|nos|number|numbers|serving|servings)?\s*(?:of\s+)?`)
+	reQtyPrefix := regexp.MustCompile(`(?i)^\s*(?:about|around)?\s*(?:half|quarter|\d+(?:\.\d+)?)\s*(?:g|gm|kg|ml|l|tsp|tbsp|cup|cups|slice|slices|piece|pieces|serving|servings)?\s*(?:of\s+)?`)
 	base = strings.TrimSpace(reQtyPrefix.ReplaceAllString(base, ""))
 	base = strings.Trim(base, " .,!?:;")
 	return strings.Join(strings.Fields(base), " ")
@@ -342,9 +317,6 @@ func cleanFoodPhrase(s, mealType string) string {
 	out := strings.TrimSpace(s)
 	out = strings.Trim(out, " .,!?:;")
 	out = regexp.MustCompile(`(?i)^(?:the|my)\s+`).ReplaceAllString(out, "")
-	out = regexp.MustCompile(`(?i)\b(?:to|for)\s+(breakfast|lunch|dinner|snack)\s+(?:as\s+well|also|too)\b`).ReplaceAllString(out, "")
-	out = regexp.MustCompile(`(?i)\b(?:to|for)\s+(breakfast|lunch|dinner|snack)\b`).ReplaceAllString(out, "")
-	out = regexp.MustCompile(`(?i)\b(?:as\s+well|also|too)\b`).ReplaceAllString(out, "")
 	out = regexp.MustCompile(`(?i)\bfrom\s+(breakfast|lunch|dinner|snack)\b`).ReplaceAllString(out, "")
 	out = regexp.MustCompile(`(?i)\bin\s+(breakfast|lunch|dinner|snack)\b`).ReplaceAllString(out, "")
 	if mealType != "" {
@@ -358,7 +330,7 @@ func cleanFoodPhrase(s, mealType string) string {
 func buildDishName(item string) string {
 	name := strings.TrimSpace(item)
 	name = regexp.MustCompile(`(?i)^(?:about|around)\s+`).ReplaceAllString(name, "")
-	name = regexp.MustCompile(`(?i)^\d+(?:\.\d+)?\s*(?:x|g|gm|kg|ml|l|tsp|tbsp|cup|cups|slice|slices|piece|pieces|pc|pcs|no|nos|number|numbers|serving|servings)\s+(?:of\s+)?`).ReplaceAllString(name, "")
+	name = regexp.MustCompile(`(?i)^\d+(?:\.\d+)?\s*(?:g|gm|kg|ml|l|tsp|tbsp|cup|cups|slice|slices|piece|pieces|serving|servings)\s+(?:of\s+)?`).ReplaceAllString(name, "")
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = item

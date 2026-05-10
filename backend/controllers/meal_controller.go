@@ -127,10 +127,6 @@ func LogMeal(w http.ResponseWriter, r *http.Request) {
 		Carbs:              totalCarbs,
 		Fat:                totalFat,
 		Fiber:              totalFiber,
-		QuantityValue:      1,
-		QuantityUnit:       "pcs",
-		QuantityBaseValue:  1,
-		QuantityBaseUnit:   "pcs",
 		Ingredients:        string(ingredientsJSON),
 		LoggedAt:           time.Now(),
 		WasOverride:        req.WasOverride,
@@ -181,7 +177,7 @@ func parseIngredient(ingredient string) (name string, quantity float64, unit str
 
 	// Pattern: number + optional unit + name
 	// Examples: "100g Paneer", "2 Eggs", "1 cup Rice", "200ml Milk"
-	pattern := regexp.MustCompile(`^(\d+(?:\.\d+)?)\s*(x|g|kg|ml|l|cup|cups|tbsp|tsp|pcs|pc|pieces?|nos?|numbers?)?\s*(.+)$`)
+	pattern := regexp.MustCompile(`^(\d+(?:\.\d+)?)\s*(g|kg|ml|l|cup|cups|tbsp|tsp|pcs|pc|pieces?)?\s*(.+)$`)
 	matches := pattern.FindStringSubmatch(strings.ToLower(ingredient))
 
 	if len(matches) >= 4 {
@@ -194,10 +190,6 @@ func parseIngredient(ingredient string) (name string, quantity float64, unit str
 			unit = "pcs"
 		}
 
-		switch unit {
-		case "x", "no", "nos", "number", "numbers", "piece", "pieces", "pc":
-			unit = "pcs"
-		}
 		return name, qty, unit
 	}
 
@@ -315,7 +307,7 @@ func convertToBaseUnit(quantity float64, unit string, ingredientName string) flo
 		return quantity * 15
 	case "tsp":
 		return quantity * 5
-	case "pcs", "pc", "piece", "pieces", "x", "no", "nos", "number", "numbers", "":
+	case "pcs", "pc", "piece", "pieces", "":
 		return quantity
 	default:
 		return quantity

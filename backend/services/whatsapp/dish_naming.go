@@ -7,7 +7,7 @@ import (
 
 var (
 	reListPrefix = regexp.MustCompile(`^\s*(?:[-*]|\d+[.)])\s*`)
-	reQtyPrefix  = regexp.MustCompile(`^\s*(?:an?|some|half|quarter|\d+(?:\.\d+)?)(?:\s*(?:x|pcs?|pieces?|nos?|numbers?|gm|g|kg|ml|l|tbsp|tsp|cup|cups))?\s*(?:of\s+)?`)
+	reQtyPrefix  = regexp.MustCompile(`^\s*(?:an?|some|half|quarter|\d+(?:\.\d+)?)(?:\s*(?:x|pcs?|pieces?|gm|g|kg|ml|l|tbsp|tsp|cup|cups))?\s*(?:of\s+)?`)
 )
 
 func canonicalDishName(dishName, mealType, ingredients string) string {

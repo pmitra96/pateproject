@@ -6,9 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/pmitra96/pateproject/config"
 	"github.com/pmitra96/pateproject/database"
@@ -84,8 +82,12 @@ func processSingleWhatsAppMessage(message map[string]interface{}) {
 	client := newWhatsAppClient()
 	if msgID != "" {
 		_ = client.MarkAsRead(msgID)
-		if !persistWebhookIdempotencyKey(msgID) {
-			return
+		if err := database.DB.Create(&models.ProcessedWebhook{MessageID: msgID}).Error; err != nil {
+			errText := strings.ToLower(err.Error())
+			if strings.Contains(errText, "duplicate") || strings.Contains(errText, "unique") {
+				return
+			}
+			logger.Error("Failed to persist webhook dedup key; continuing", "msgID", msgID, "error", err)
 		}
 	}
 
@@ -129,31 +131,17 @@ func processSingleWhatsAppMessage(message map[string]interface{}) {
 	if msgID == "" {
 		ts, _ := message["timestamp"].(string)
 		fallback := fallbackWebhookMessageKey(fromPhone, msgType, textBody, mediaID, ts)
-		if !persistWebhookIdempotencyKey(fallback) {
-			return
-		}
-		contentKey := fallbackWebhookContentBucketKey(fromPhone, msgType, textBody, mediaID, ts)
-		if !persistWebhookIdempotencyKey(contentKey) {
-			return
+		if err := database.DB.Create(&models.ProcessedWebhook{MessageID: fallback}).Error; err != nil {
+			errText := strings.ToLower(err.Error())
+			if strings.Contains(errText, "duplicate") || strings.Contains(errText, "unique") {
+				return
+			}
+			logger.Error("Failed to persist fallback webhook dedup key; continuing", "fallback_key", fallback, "error", err)
 		}
 	}
 
 	session := whatsapp.NewSession(user, msgID, logger.L().With("user_id", user.ID, "message_id", msgID))
 	processWhatsAppIntent(session, textBody, imageBase64)
-}
-
-func persistWebhookIdempotencyKey(key string) bool {
-	if strings.TrimSpace(key) == "" {
-		return true
-	}
-	if err := database.DB.Create(&models.ProcessedWebhook{MessageID: key}).Error; err != nil {
-		errText := strings.ToLower(err.Error())
-		if strings.Contains(errText, "duplicate") || strings.Contains(errText, "unique") {
-			return false
-		}
-		logger.Error("Failed to persist webhook dedup key; continuing", "key", key, "error", err)
-	}
-	return true
 }
 
 func fallbackWebhookMessageKey(fromPhone, msgType, textBody, mediaID, timestamp string) string {
@@ -164,20 +152,6 @@ func fallbackWebhookMessageKey(fromPhone, msgType, textBody, mediaID, timestamp 
 		strings.TrimSpace(mediaID)
 	sum := sha256.Sum256([]byte(payload))
 	return "fallback:" + hex.EncodeToString(sum[:16])
-}
-
-func fallbackWebhookContentBucketKey(fromPhone, msgType, textBody, mediaID, timestamp string) string {
-	bucket := time.Now().Unix() / 120
-	if ts, err := strconv.ParseInt(strings.TrimSpace(timestamp), 10, 64); err == nil && ts > 0 {
-		bucket = ts / 120
-	}
-	payload := strings.ToLower(strings.TrimSpace(fromPhone)) + "|" +
-		strings.ToLower(strings.TrimSpace(msgType)) + "|" +
-		strconv.FormatInt(bucket, 10) + "|" +
-		strings.ToLower(strings.TrimSpace(textBody)) + "|" +
-		strings.TrimSpace(mediaID)
-	sum := sha256.Sum256([]byte(payload))
-	return "content_bucket:" + hex.EncodeToString(sum[:16])
 }
 
 func GetOrCreateWhatsAppUser(phone string) (*models.User, error) {

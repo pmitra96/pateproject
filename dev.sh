@@ -23,30 +23,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Load environment variables
-APP_ENV="${APP_ENV:-development}"
-if [ "$APP_ENV" = "production" ]; then
-  ENV_FILE=".env"
-else
-  ENV_FILE=".env.development"
-fi
-
-if [ -f "$ENV_FILE" ]; then
-  echo "📄 Loading env from $ENV_FILE (APP_ENV=$APP_ENV)"
+if [ -f .env ]; then
   set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
+  source .env
   set +a
-else
-  echo "❌ Missing env file: $ENV_FILE"
-  if [ "$APP_ENV" = "development" ]; then
-    echo "   Create .env.development for local runs. Keep .env for production."
-  fi
-  exit 1
-fi
-
-if [ -z "${DATABASE_URL:-}" ]; then
-  echo "❌ DATABASE_URL is empty in $ENV_FILE"
-  exit 1
 fi
 
 # Ensure PostgreSQL binaries are in PATH

@@ -2,7 +2,6 @@ package whatsapp
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -12,17 +11,9 @@ import (
 )
 
 const dedupeWindow = 20 * time.Minute
-var reMealTextPunct = regexp.MustCompile(`[^\w\s]`)
 
 func normalizeMealText(s string) string {
-	n := strings.ToLower(strings.TrimSpace(s))
-	replacer := strings.NewReplacer(
-		"omlette", "omelette",
-		"protien", "protein",
-	)
-	n = replacer.Replace(n)
-	n = reMealTextPunct.ReplaceAllString(n, " ")
-	return strings.Join(strings.Fields(n), " ")
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(s))), " ")
 }
 
 func findMealsForDay(userID uint, mealType string, dayStart, dayEnd time.Time) ([]models.MealLog, error) {
@@ -50,12 +41,7 @@ func selectMealForCorrection(candidates []models.MealLog, targetDish string) (mo
 	var matched []models.MealLog
 	for _, meal := range candidates {
 		nameNorm := normalizeMealText(meal.Name)
-		targetCompact := strings.ReplaceAll(targetNorm, " ", "")
-		nameCompact := strings.ReplaceAll(nameNorm, " ", "")
-		if nameNorm == targetNorm ||
-			strings.Contains(nameNorm, targetNorm) ||
-			strings.Contains(targetNorm, nameNorm) ||
-			(nameCompact != "" && targetCompact != "" && (strings.Contains(nameCompact, targetCompact) || strings.Contains(targetCompact, nameCompact))) {
+		if nameNorm == targetNorm || strings.Contains(nameNorm, targetNorm) || strings.Contains(targetNorm, nameNorm) {
 			matched = append(matched, meal)
 		}
 	}

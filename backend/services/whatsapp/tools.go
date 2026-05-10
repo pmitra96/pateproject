@@ -21,24 +21,7 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 		return jsonString(map[string]any{"ok": false, "error": "no_meals_detected"}), nil
 	}
 
-	type pendingMealLog struct {
-		DishName     string
-		Ingredients  string
-		MealType     string
-		Estimated    *services.FoodEstimate
-		ControlMode  string
-		LoggedAt     time.Time
-		QuantityInfo services.MealQuantity
-	}
-	pending := make([]pendingMealLog, 0, len(meals))
-
-	now := nowForUser(s.User.ID)
-	preState, _ := services.ComputeRemainingDayState(s.User.ID, now)
-	controlMode := "NORMAL"
-	if preState != nil {
-		controlMode = preState.ControlMode
-	}
-
+	var entries []map[string]any
 	for _, m := range meals {
 		mealData, _ := m.(map[string]interface{})
 		dishName, _ := mealData["dish_name"].(string)
@@ -48,81 +31,43 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 
 		estimated, err := ns.EstimateNutritionFromQuery(s.User.ID, ingredients)
 		if err != nil || estimated == nil {
-			return jsonString(map[string]any{"ok": false, "error": ErrCodeNutritionEstimateFailed, "dish_name": dishName}), nil
+			entries = append(entries, map[string]any{"dish_name": dishName, "ok": false, "error": "nutrition_estimation_failed"})
+			continue
 		}
-		qty := services.ParseMealQuantity(estimated.ServingSize)
-		pending = append(pending, pendingMealLog{
-			DishName:     dishName,
-			Ingredients:  ingredients,
-			MealType:     mealType,
-			Estimated:    estimated,
-			ControlMode:  controlMode,
-			LoggedAt:     now,
-			QuantityInfo: qty,
+
+		now := nowForUser(s.User.ID)
+		preState, _ := services.ComputeRemainingDayState(s.User.ID, now)
+		controlMode := "NORMAL"
+		if preState != nil {
+			controlMode = preState.ControlMode
+		}
+
+		mealLog := models.MealLog{
+			UserID:           s.User.ID,
+			Name:             dishName,
+			MealType:         mealType,
+			Ingredients:      ingredients,
+			Calories:         estimated.Calories,
+			Protein:          estimated.Protein,
+			Carbs:            estimated.Carbs,
+			Fat:              estimated.Fat,
+			Fiber:            estimated.Fiber,
+			LoggedAt:         now,
+			ControlModeAtLog: controlMode,
+		}
+		database.DB.Create(&mealLog)
+		syncMealComponents(s.User.ID, mealLog.ID, ingredients, estimated)
+		entries = append(entries, map[string]any{
+			"dish_name": dishName, "meal_type": mealType, "ok": true,
+			"calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber,
+			"serving_size": estimated.ServingSize,
+			"logged_at":    mealLog.LoggedAt.Format(time.RFC3339),
+			"display_time": userReadableTime(s.User.ID, mealLog.LoggedAt),
 		})
 	}
 
-	var entries []map[string]any
-	createdIDs := make([]uint, 0, len(pending))
-	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		for _, pm := range pending {
-			estimated := pm.Estimated
-			if estimated == nil {
-				return fmt.Errorf(ErrCodeNutritionEstimateFailed)
-			}
-			mealLog := models.MealLog{
-				UserID:           s.User.ID,
-				Name:             pm.DishName,
-				MealType:         pm.MealType,
-				Ingredients:      pm.Ingredients,
-				Calories:         estimated.Calories,
-				Protein:          estimated.Protein,
-				Carbs:            estimated.Carbs,
-				Fat:              estimated.Fat,
-				Fiber:            estimated.Fiber,
-				ServingSize:      estimated.ServingSize,
-				LoggedAt:         pm.LoggedAt,
-				ControlModeAtLog: pm.ControlMode,
-			}
-			if err := tx.Create(&mealLog).Error; err != nil {
-				return err
-			}
-			mealLog.QuantityValue = pm.QuantityInfo.Value
-			mealLog.QuantityUnit = pm.QuantityInfo.Unit
-			mealLog.QuantityBaseValue = pm.QuantityInfo.BaseValue
-			mealLog.QuantityBaseUnit = pm.QuantityInfo.BaseUnit
-			if err := tx.Model(&mealLog).Updates(map[string]any{
-				"quantity_value":      mealLog.QuantityValue,
-				"quantity_unit":       mealLog.QuantityUnit,
-				"quantity_base_value": mealLog.QuantityBaseValue,
-				"quantity_base_unit":  mealLog.QuantityBaseUnit,
-			}).Error; err != nil {
-				return err
-			}
-			var check models.MealLog
-			if err := tx.Where("id = ? AND user_id = ?", mealLog.ID, s.User.ID).First(&check).Error; err != nil {
-				return err
-			}
-			syncMealComponents(s.User.ID, mealLog.ID, pm.Ingredients, estimated)
-			createdIDs = append(createdIDs, mealLog.ID)
-			entries = append(entries, map[string]any{
-				"meal_id": mealLog.ID, "dish_name": pm.DishName, "meal_type": pm.MealType, "ok": true,
-				"calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber,
-				"serving_size": estimated.ServingSize,
-				"logged_at":    mealLog.LoggedAt.Format(time.RFC3339),
-				"display_time": userReadableTime(s.User.ID, mealLog.LoggedAt),
-			})
-		}
-		return nil
-	}); err != nil {
-		return jsonString(map[string]any{"ok": false, "error": ErrCodeWriteFailed}), nil
-	}
-	if len(createdIDs) != len(pending) {
-		return jsonString(map[string]any{"ok": false, "error": ErrCodeReadbackFailed}), nil
-	}
-
 	if len(entries) == 0 {
-		return jsonString(map[string]any{"ok": false, "error": ErrCodeNoMealsLogged}), nil
+		return jsonString(map[string]any{"ok": false, "error": "no_meals_logged"}), nil
 	}
 
 	newState, _ := services.ComputeRemainingDayState(s.User.ID, nowForUser(s.User.ID))
@@ -200,33 +145,6 @@ func HandleAskAdvice(s *Session, args map[string]interface{}) (string, error) {
 		"ok": true, "decision": decision, "reason": result.Reason,
 		"estimated": map[string]any{"calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber, "serving_size": estimated.ServingSize},
 		"status":    result.Status,
-	}), nil
-}
-
-func HandleGetFoodNutrition(s *Session, args map[string]interface{}) (string, error) {
-	ns := services.NewNutritionService()
-	foodName, _ := args["food_description"].(string)
-	foodName = strings.TrimSpace(foodName)
-	if foodName == "" {
-		return jsonString(map[string]any{"ok": false, "error": "food_description_required"}), nil
-	}
-
-	estimated, err := ns.EstimateNutritionFromQuery(s.User.ID, foodName)
-	if err != nil || estimated == nil {
-		return jsonString(map[string]any{"ok": false, "error": "nutrition_estimation_failed"}), nil
-	}
-
-	return jsonString(map[string]any{
-		"ok":               true,
-		"food_description": foodName,
-		"estimated": map[string]any{
-			"calories":     estimated.Calories,
-			"protein":      estimated.Protein,
-			"carbs":        estimated.Carbs,
-			"fat":          estimated.Fat,
-			"fiber":        estimated.Fiber,
-			"serving_size": estimated.ServingSize,
-		},
 	}), nil
 }
 
