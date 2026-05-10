@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -153,6 +154,34 @@ def send_webhook(base_url: str, phone: str, text: str, msg_id: Optional[str] = N
         return False
 
 
+def stable_message_id(phone: str, transcript_path: str, turn_idx: int, text: str) -> str:
+    seed = f"{phone}|{os.path.abspath(transcript_path)}|{turn_idx}|{text.strip().lower()}"
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
+    return f"replay-{digest}"
+
+
+def reset_replay_state(db_url: str, phone: str) -> None:
+    sql = f"""
+WITH u AS (
+  SELECT user_id FROM user_identities WHERE provider='whatsapp' AND external_id='{phone}' LIMIT 1
+)
+DELETE FROM meal_components WHERE user_id IN (SELECT user_id FROM u);
+WITH u AS (
+  SELECT user_id FROM user_identities WHERE provider='whatsapp' AND external_id='{phone}' LIMIT 1
+)
+DELETE FROM meal_logs WHERE user_id IN (SELECT user_id FROM u);
+WITH u AS (
+  SELECT user_id FROM user_identities WHERE provider='whatsapp' AND external_id='{phone}' LIMIT 1
+)
+DELETE FROM conversations WHERE user_id IN (SELECT user_id FROM u);
+WITH u AS (
+  SELECT user_id FROM user_identities WHERE provider='whatsapp' AND external_id='{phone}' LIMIT 1
+)
+DELETE FROM conversation_states WHERE user_id IN (SELECT user_id FROM u);
+"""
+    _ = run_psql(db_url, sql)
+
+
 def normalize(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
 
@@ -165,6 +194,8 @@ def replay(
     timeout_sec: int,
     delay_sec: float,
     check_expected: bool,
+    transcript_path: str,
+    deterministic_ids: bool,
 ) -> int:
     failures = 0
     for idx, turn in enumerate(turns, start=1):
@@ -172,7 +203,10 @@ def replay(
         baseline_ts, baseline_msgs = get_conversation_snapshot(db_url, phone)
         baseline_assistant = last_assistant_after_user(baseline_msgs, turn.user)
 
-        if not send_webhook(base_url, phone, turn.user):
+        msg_id = None
+        if deterministic_ids:
+            msg_id = stable_message_id(phone, transcript_path, idx, turn.user)
+        if not send_webhook(base_url, phone, turn.user, msg_id=msg_id):
             print(f"Bot: [ERROR] Failed to send webhook to {base_url}")
             failures += 1
             continue
@@ -216,6 +250,8 @@ def main() -> int:
     ap.add_argument("--timeout-sec", type=int, default=30)
     ap.add_argument("--delay-sec", type=float, default=0.0)
     ap.add_argument("--check-expected", action="store_true", help="Compare replay reply with transcript bot line.")
+    ap.add_argument("--deterministic-ids", action="store_true", help="Use stable message IDs so reruns are deduped.")
+    ap.add_argument("--reset-before", action="store_true", help="Clear meal/conversation state for this phone before replay.")
     args = ap.parse_args()
 
     turns = parse_transcript(args.transcript)
@@ -231,6 +267,9 @@ def main() -> int:
     print(f"Replay turns: {len(turns)}")
     print(f"Base URL: {args.base_url}")
     print(f"Phone: {args.phone}")
+    if args.reset_before:
+        reset_replay_state(db_url, args.phone)
+        print("Reset state: meal_logs, meal_components, conversations, conversation_states")
     failures = replay(
         turns=turns,
         base_url=args.base_url,
@@ -239,6 +278,8 @@ def main() -> int:
         timeout_sec=args.timeout_sec,
         delay_sec=args.delay_sec,
         check_expected=args.check_expected,
+        transcript_path=args.transcript,
+        deterministic_ids=args.deterministic_ids,
     )
     print(f"Replay done. failures={failures}")
     return 1 if failures else 0
@@ -246,4 +287,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
