@@ -66,3 +66,16 @@ func TestSelectMealForCorrection_AmbiguousTarget(t *testing.T) {
 		t.Fatalf("expected ambiguous_target, got %q", reason)
 	}
 }
+
+func TestSelectMealForCorrection_TypoMatchOmlette(t *testing.T) {
+	candidates := []models.MealLog{
+		{ID: 1, Name: "Egg Omelette", MealType: "Breakfast", LoggedAt: time.Now()},
+	}
+	meal, reason, ok := selectMealForCorrection(candidates, "egg omlette")
+	if !ok {
+		t.Fatalf("expected typo match, got reason=%q", reason)
+	}
+	if meal.ID != 1 {
+		t.Fatalf("expected id=1, got %d", meal.ID)
+	}
+}

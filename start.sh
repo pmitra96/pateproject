@@ -1,6 +1,7 @@
 #!/bin/bash
 # Quick start script for PateProject
 # Usage: ./start.sh
+# Optional: APP_ENV=development|production ./start.sh
 
 # Load nvm
 export NVM_DIR="$HOME/.nvm"

@@ -15,7 +15,7 @@ type ServingNormalization struct {
 	Notes               []string
 }
 
-var explicitQuantityPattern = regexp.MustCompile(`(?i)\b(\d+(?:\.\d+)?)\s*(g|gram|grams|kg|ml|l|litre|liter|cup|cups|bowl|bowls|glass|glasses|tbsp|tablespoon|tablespoons|tsp|teaspoon|teaspoons|piece|pieces|pc|pcs|slice|slices|serving|servings|plate|plates|egg|eggs|whole|half)\b`)
+var explicitQuantityPattern = regexp.MustCompile(`(?i)\b(\d+(?:\.\d+)?)\s*(x|g|gram|grams|kg|ml|l|litre|liter|cup|cups|bowl|bowls|glass|glasses|tbsp|tablespoon|tablespoons|tsp|teaspoon|teaspoons|piece|pieces|pc|pcs|no|nos|number|numbers|slice|slices|serving|servings|plate|plates|egg|eggs|whole|half)\b`)
 
 func NormalizeServingQuery(query string) ServingNormalization {
 	clean := strings.TrimSpace(query)
