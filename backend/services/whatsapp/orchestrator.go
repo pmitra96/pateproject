@@ -76,6 +76,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 		if count >= int64(config.GetWhatsAppDailyLimit()) {
 			s.Logger.Warn("User reached daily limit")
 			o.replySafe(s, MsgErrorLimit)
+			o.persistTurnAndStateAtomic(s.MessageID, s.User.ID, text, MsgErrorLimit, nil, "limit_reached", "", MsgErrorLimit)
 			return
 		}
 	}
@@ -104,20 +105,27 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	}
 	if toolName, toolArgs, handled, pendingReply := resolvePendingActionChoice(state, s.MessageID, text); handled {
 		if pendingReply != "" {
-			o.replySafe(s, pendingReply)
-			updateConversationStateAfterReply(state, "pending_action", pendingReply)
-			o.appendConversationTurn(s.User.ID, text, pendingReply)
+			o.finalizeReply(s, state, text, pendingReply, "pending_action", "", pendingReply)
 			return
 		}
 		if o.executeToolAndRespond(s, state, "pending_action_execute", text, toolName, toolArgs) {
 			return
 		}
 	}
+	if mealParserV1Enabled() && o.tryMealParserV1Log(s, state, text, userContext) {
+		return
+	}
+	decision := routeWhatsAppMessage(text, state)
 
 	overridden, hasOverride := classifyIntentOverrides(text)
 	llmClient := llm.NewClient()
 	intentResult := overridden
-	runClassifier := hasOverride || looksLikeMealCRUD(strings.ToLower(strings.TrimSpace(text)))
+	intentClassifierMode := config.GetIntentClassifierMode()
+	intentClassifierEnabled := intentClassifierMode == "launch"
+	runClassifier := intentClassifierEnabled && (hasOverride || looksLikeMealCRUD(strings.ToLower(strings.TrimSpace(text))) || decision.NeedsLLM)
+	if !intentClassifierEnabled {
+		s.Logger.Info("Intent classifier disabled by config", "mode", intentClassifierMode, "trace_id", traceID)
+	}
 	if runClassifier && !hasOverride {
 		classifier := newIntentClassifier(llmClient)
 		classified, err := classifier.Classify(text, userContext, traceID)
@@ -136,9 +144,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 			toolName, args, directReply, ok := mapIntentToExecution(intentResult)
 			if directReply != "" {
 				reply = directReply
-				o.replySafe(s, reply)
-				updateConversationStateAfterReply(state, string(intentResult.Intent), reply)
-				o.appendConversationTurn(s.User.ID, text, reply)
+				o.finalizeReply(s, state, text, reply, string(intentResult.Intent), "", reply)
 				return
 			}
 			if ok && toolName != "" {
@@ -154,19 +160,15 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 					mealType, _ := intentResult.Entities["meal_type"].(string)
 					p := newPendingAction("delete_meal", "delete_scope_choice", map[string]any{"meal_type": mealType}, "", nil, traceID, s.MessageID)
 					setPendingAction(state, p)
-					msg := "Do you want to delete all " + strings.ToLower(mealType) + " entries today, or just one item?"
-					o.replySafe(s, msg)
-					updateConversationStateAfterReply(state, "confirm_delete_scope", msg)
-					o.appendConversationTurn(s.User.ID, text, msg)
+					msg := "Choose one option:\n0. Delete all " + strings.ToLower(mealType) + " entries today\n1. Delete one item by dish name"
+					o.finalizeReply(s, state, text, msg, "confirm_delete_scope", "", msg)
 					return
 				}
 				if scope == "all_today" {
 					p := newPendingAction("clear_day", "confirmation", map[string]any{"scope": "all_today"}, "clear_all_meals_today", map[string]any{}, traceID, s.MessageID)
 					setPendingAction(state, p)
 					msg := "Please confirm: clear all meals logged today? (yes/no)"
-					o.replySafe(s, msg)
-					updateConversationStateAfterReply(state, "confirm_clear_day", msg)
-					o.appendConversationTurn(s.User.ID, text, msg)
+					o.finalizeReply(s, state, text, msg, "confirm_clear_day", "", msg)
 					return
 				}
 				if scope == "single_id" {
@@ -175,9 +177,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 						p := newPendingAction("delete_meal", "confirmation", map[string]any{"scope": "single_id"}, "modify_logged_meal", map[string]any{"action": "delete", "meal_id": float64(mealID)}, traceID, s.MessageID)
 						setPendingAction(state, p)
 						msg := "Please confirm delete for meal id " + raw + ". (yes/no)"
-						o.replySafe(s, msg)
-						updateConversationStateAfterReply(state, "confirm_delete_id", msg)
-						o.appendConversationTurn(s.User.ID, text, msg)
+						o.finalizeReply(s, state, text, msg, "confirm_delete_id", "", msg)
 						return
 					}
 				}
@@ -186,16 +186,13 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 		}
 	}
 
-	decision := routeWhatsAppMessage(text, state)
 	s.Logger.Info("V2 route decision", "intent", decision.Intent, "tool", decision.ToolName, "needs_llm", decision.NeedsLLM)
 	if decision.Intent == "crud_format_clarification" {
 		decision.NeedsLLM = true
 	}
 	if !decision.NeedsLLM {
 		if decision.DirectReply != "" {
-			o.replySafe(s, decision.DirectReply)
-			updateConversationStateAfterReply(state, decision.Intent, decision.DirectReply)
-			o.appendConversationTurn(s.User.ID, text, decision.DirectReply)
+			o.finalizeReply(s, state, text, decision.DirectReply, decision.Intent, "", decision.DirectReply)
 			return
 		}
 		if decision.ToolName != "" {
@@ -227,8 +224,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	case <-time.After(llmTimeout):
 		msg := "I’m taking too long to process that right now. Please retry once."
 		s.Logger.Error("LLM Processing Timeout", "trace_id", traceID, "timeout_ms", llmTimeout.Milliseconds())
-		o.replySafe(s, msg)
-		o.appendConversationTurn(s.User.ID, text, msg)
+		o.finalizeReply(s, state, text, msg, "llm_timeout", "", msg)
 		return
 	}
 	duration := time.Since(startTime)
@@ -237,12 +233,10 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	if err != nil {
 		s.Logger.Error("LLM Processing Error", "error", err, "duration_ms", duration.Milliseconds())
 		if heuristic := o.tryHeuristicFallback(s, text); heuristic != "" {
-			o.replySafe(s, heuristic)
-			o.appendConversationTurn(s.User.ID, text, heuristic)
+			o.finalizeReply(s, state, text, heuristic, "heuristic_fallback", "", heuristic)
 			return
 		}
-		o.replySafe(s, MsgErrorBrain)
-		o.appendConversationTurn(s.User.ID, text, MsgErrorBrain)
+		o.finalizeReply(s, state, text, MsgErrorBrain, "llm_error", "", MsgErrorBrain)
 		return
 	}
 	s.Logger.Info("LLM Processing Complete", "duration_ms", duration.Milliseconds(), "total_tokens", usage.TotalTokens)
@@ -259,18 +253,13 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	})
 	s.Logger.Info("LLM usage", "prompt_tokens", usage.PromptTokens, "completion_tokens", usage.CompletionTokens, "total_tokens", usage.TotalTokens, "history_len", len(history))
 
-	// 7. Update History
-	o.updateHistory(s.User.ID, text, assistantMsg)
-
 	// 8. Handle Conversational vs Tool Replies
 	if len(assistantMsg.ToolCalls) == 0 {
 		content := o.extractText(assistantMsg)
 		if synthetic, ok := synthesizeToolCallFromActionText(content); ok {
 			if shouldBlockCorrectionLogMisfire(text, synthetic) {
 				msg := correctionSingleItemPrompt()
-				o.replySafe(s, msg)
-				updateConversationStateAfterReply(state, "llm_correction_guard", msg)
-				o.appendAssistantMessage(s.User.ID, msg)
+				o.finalizeReply(s, state, text, msg, "llm_correction_guard", "", msg)
 				return
 			}
 			synthetic = rewriteCorrectionLogMisfire(text, synthetic)
@@ -282,25 +271,19 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 				}}
 				if synthetic.Function.Name == "get_daily_summary" {
 					if deterministic := deterministicToolReply(result); deterministic != "" && deterministic != "Done." {
-						o.replySafe(s, deterministic)
-						updateConversationStateAfterTool(state, "llm", synthetic.Function.Name, resp)
-						o.appendAssistantMessage(s.User.ID, deterministic)
+						o.finalizeReply(s, state, text, deterministic, "llm", synthetic.Function.Name, resp)
 						return
 					}
 				}
 				if finalReply := o.composeFinalReplyFromToolResults(llmClient, text, result); finalReply != "" {
-					o.replySafe(s, finalReply)
-					updateConversationStateAfterTool(state, "llm", synthetic.Function.Name, resp)
-					o.appendAssistantMessage(s.User.ID, finalReply)
+					o.finalizeReply(s, state, text, finalReply, "llm", synthetic.Function.Name, resp)
 					return
 				}
 				human := deterministicToolReply(result)
 				if human == "" || human == "Done." {
 					human = "Done."
 				}
-				o.replySafe(s, human)
-				updateConversationStateAfterTool(state, "llm", synthetic.Function.Name, resp)
-				o.appendAssistantMessage(s.User.ID, human)
+				o.finalizeReply(s, state, text, human, "llm", synthetic.Function.Name, resp)
 				return
 			}
 		}
@@ -310,40 +293,31 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 				result := []toolExecutionResult{{ToolName: inferred.Function.Name, Response: parseToolResponse(resp)}}
 				if inferred.Function.Name == "get_daily_summary" {
 					if deterministic := deterministicToolReply(result); deterministic != "" && deterministic != "Done." {
-						o.replySafe(s, deterministic)
-						updateConversationStateAfterTool(state, "llm", inferred.Function.Name, resp)
-						o.appendAssistantMessage(s.User.ID, deterministic)
+						o.finalizeReply(s, state, text, deterministic, "llm", inferred.Function.Name, resp)
 						return
 					}
 				}
 				if finalReply := o.composeFinalReplyFromToolResults(llmClient, text, result); finalReply != "" {
-					o.replySafe(s, finalReply)
-					updateConversationStateAfterTool(state, "llm", inferred.Function.Name, resp)
-					o.appendAssistantMessage(s.User.ID, finalReply)
+					o.finalizeReply(s, state, text, finalReply, "llm", inferred.Function.Name, resp)
 					return
 				}
 				human := deterministicToolReply(result)
 				if human == "" || human == "Done." {
 					human = "Done."
 				}
-				o.replySafe(s, human)
-				updateConversationStateAfterTool(state, "llm", inferred.Function.Name, resp)
-				o.appendAssistantMessage(s.User.ID, human)
+				o.finalizeReply(s, state, text, human, "llm", inferred.Function.Name, resp)
 				return
 			}
 		}
 		if content == "" {
 			if heuristic := o.tryHeuristicFallback(s, text); heuristic != "" {
-				o.replySafe(s, heuristic)
-				o.appendAssistantMessage(s.User.ID, heuristic)
+				o.finalizeReply(s, state, text, heuristic, "heuristic_fallback", "", heuristic)
 				return
 			}
-			o.replySafe(s, MsgErrorEmpty)
-			o.appendAssistantMessage(s.User.ID, MsgErrorEmpty)
+			o.finalizeReply(s, state, text, MsgErrorEmpty, "empty_llm_reply", "", MsgErrorEmpty)
 		} else {
 			s.Logger.Info("Reply mode", "type", "direct_llm")
-			o.replySafe(s, content)
-			updateConversationStateAfterReply(state, "llm", content)
+			o.finalizeReply(s, state, text, content, "llm", "", content)
 		}
 		return
 	}
@@ -353,10 +327,13 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	if skippedDuplicates > 0 {
 		s.Logger.Info("Skipped duplicate tool calls", "duplicates", skippedDuplicates, "requested", len(assistantMsg.ToolCalls), "executing", len(uniqueToolCalls))
 	}
+	primaryToolCall, hasPrimary := selectPrimaryToolCall(uniqueToolCalls)
+	if hasPrimary {
+		uniqueToolCalls = []llm.ToolCall{primaryToolCall}
+	}
 
 	var toolResponses []string
 	var toolResults []toolExecutionResult
-	mealCreateExecuted := false
 	for _, tc := range uniqueToolCalls {
 		if shouldBlockCorrectionLogMisfire(text, tc) {
 			toolResults = append(toolResults, toolExecutionResult{
@@ -370,20 +347,6 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 			continue
 		}
 		execToolCall := rewriteCorrectionLogMisfire(text, tc)
-		if isMealCreateToolCall(execToolCall) {
-			if mealCreateExecuted {
-				toolResults = append(toolResults, toolExecutionResult{
-					ToolName: execToolCall.Function.Name,
-					Response: map[string]any{
-						"ok":      false,
-						"error":   "duplicate_write_blocked",
-						"message": "I skipped an extra meal logging action in this message to avoid duplicate entries.",
-					},
-				})
-				continue
-			}
-			mealCreateExecuted = true
-		}
 		resp, err := o.Registry.Execute(s, execToolCall)
 		if err != nil {
 			s.Logger.Warn("Tool Execution Error", "tool", execToolCall.Function.Name, "error", err)
@@ -415,9 +378,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	// Prefer deterministic human-readable rendering for known structured tool outputs.
 	if len(toolResults) > 0 {
 		if deterministic := deterministicToolReply(toolResults); deterministic != "" && deterministic != "Done." {
-			o.replySafe(s, deterministic)
-			updateConversationStateAfterTool(state, "llm", firstToolName(toolResults), marshalToolResults(toolResults))
-			o.appendAssistantMessage(s.User.ID, deterministic)
+			o.finalizeReply(s, state, text, deterministic, "llm", firstToolName(toolResults), marshalToolResults(toolResults))
 			return
 		}
 	}
@@ -425,23 +386,20 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	if len(toolResults) > 0 && shouldUseSecondPass(toolResults) {
 		if toolExecuted(toolResults, "get_daily_summary") {
 			if deterministic := deterministicToolReply(toolResults); deterministic != "" && deterministic != "Done." {
-				o.replySafe(s, deterministic)
-				o.appendAssistantMessage(s.User.ID, deterministic)
+				o.finalizeReply(s, state, text, deterministic, "llm", firstToolName(toolResults), marshalToolResults(toolResults))
 				return
 			}
 		}
 		finalReply := o.composeFinalReplyFromToolResults(llmClient, text, toolResults)
 		if finalReply != "" {
 			s.Logger.Info("Reply mode", "type", "tool_second_pass", "tool_count", len(toolResults))
-			o.replySafe(s, finalReply)
-			updateConversationStateAfterTool(state, "llm", firstToolName(toolResults), marshalToolResults(toolResults))
-			o.appendAssistantMessage(s.User.ID, finalReply)
+			o.finalizeReply(s, state, text, finalReply, "llm", firstToolName(toolResults), marshalToolResults(toolResults))
 			return
 		}
 	}
 
 	if len(toolResponses) == 0 {
-		o.replySafe(s, MsgErrorEmpty)
+		o.finalizeReply(s, state, text, MsgErrorEmpty, "tool_empty_reply", "", MsgErrorEmpty)
 		return
 	}
 	s.Logger.Info("Reply mode", "type", "tool_raw", "tool_count", len(toolResponses))
@@ -454,9 +412,7 @@ func (o *Orchestrator) ProcessMessage(s *Session, text string, imageBase64 strin
 	if finalRaw == "Done." {
 		finalRaw = "I finished that request."
 	}
-	o.replySafe(s, finalRaw)
-	updateConversationStateAfterTool(state, "llm", firstToolName(toolResults), marshalToolResults(toolResults))
-	o.appendAssistantMessage(s.User.ID, finalRaw)
+	o.finalizeReply(s, state, text, finalRaw, "llm", firstToolName(toolResults), marshalToolResults(toolResults))
 }
 
 func correctionSingleItemPrompt() string {
@@ -505,6 +461,7 @@ func shouldBlockCorrectionLogMisfire(text string, tc llm.ToolCall) bool {
 	return !ok || decision.ToolName != "modify_logged_meal"
 }
 
+// Retained for test coverage and backward-compat helper semantics.
 func isMealCreateToolCall(tc llm.ToolCall) bool {
 	name := strings.ToLower(strings.TrimSpace(tc.Function.Name))
 	if name == "log_meals" {
@@ -519,6 +476,38 @@ func isMealCreateToolCall(tc llm.ToolCall) bool {
 	}
 	action, _ := args["action"].(string)
 	return strings.EqualFold(strings.TrimSpace(action), "add")
+}
+
+func selectPrimaryToolCall(calls []llm.ToolCall) (llm.ToolCall, bool) {
+	if len(calls) == 0 {
+		return llm.ToolCall{}, false
+	}
+	priority := func(name string) int {
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "modify_logged_meal":
+			return 1
+		case "log_meals":
+			return 2
+		case "clear_all_meals_today":
+			return 3
+		case "set_daily_goal", "update_user_profile", "update_pantry":
+			return 4
+		case "get_daily_summary", "get_leftover_budget", "ask_advice", "get_food_nutrition":
+			return 5
+		default:
+			return 9
+		}
+	}
+	best := calls[0]
+	bestScore := priority(best.Function.Name)
+	for _, tc := range calls[1:] {
+		score := priority(tc.Function.Name)
+		if score < bestScore {
+			best = tc
+			bestScore = score
+		}
+	}
+	return best, true
 }
 
 func (o *Orchestrator) tryHeuristicFallback(s *Session, text string) string {
@@ -664,10 +653,41 @@ func (o *Orchestrator) updateHistory(userID uint, userText string, assistantMsg 
 func (o *Orchestrator) replySafe(s *Session, text string) {
 	lower := strings.ToLower(strings.TrimSpace(text))
 	if strings.HasPrefix(lower, "action:") || strings.Contains(lower, "[action:") {
-		s.Reply("I fetched your data, but had a formatting issue. Please retry once.")
+		fallback := "I fetched your data, but had a formatting issue. Please retry once."
+		s.Reply(fallback)
+		o.persistTurnReply(s, fallback, "", "")
 		return
 	}
 	s.Reply(text)
+}
+
+func (o *Orchestrator) finalizeReply(s *Session, st *models.ConversationState, userText, assistantText, intent, toolName, toolResult string) {
+	o.replySafe(s, assistantText)
+	o.persistTurnAndStateAtomic(s.MessageID, s.User.ID, userText, assistantText, st, intent, toolName, toolResult)
+}
+
+func (o *Orchestrator) persistTurnReply(s *Session, assistantText, intent, toolName string) {
+	if s == nil || strings.TrimSpace(s.MessageID) == "" {
+		return
+	}
+	// Do not close turn on interim thinking acknowledgements.
+	if strings.TrimSpace(assistantText) == MsgThinking || strings.TrimSpace(assistantText) == MsgAnalyzing || strings.TrimSpace(assistantText) == MsgProcessing {
+		return
+	}
+	updates := map[string]any{
+		"assistant_text": assistantText,
+		"status":         "completed",
+		"updated_at":     time.Now(),
+	}
+	if strings.TrimSpace(intent) != "" {
+		updates["last_intent"] = strings.TrimSpace(intent)
+	}
+	if strings.TrimSpace(toolName) != "" {
+		updates["last_tool"] = strings.TrimSpace(toolName)
+	}
+	_ = database.DB.Model(&models.ConversationTurn{}).
+		Where("message_id = ? AND status IN ?", s.MessageID, []string{"processing", "received", "retryable"}).
+		Updates(updates).Error
 }
 
 func buildToolCall(name string, args map[string]interface{}) llm.ToolCall {
@@ -968,13 +988,28 @@ func deterministicToolReply(results []toolExecutionResult) string {
 		if m, ok := r.Response.(map[string]any); ok {
 			decision, _ := m["decision"].(string)
 			reason, _ := m["reason"].(string)
-			if decision == "" {
-				decision = "Here is your guidance."
+			status, _ := m["status"].(string)
+			if strings.TrimSpace(decision) == "" {
+				switch strings.TrimSpace(status) {
+				case "ALLOW":
+					decision = "✅ Yes, you can have this."
+				case "ALLOW_WITH_CONSTRAINT":
+					decision = "⚠️ You can have this, but keep the portion small."
+				default:
+					decision = "❌ Not a good fit for today."
+				}
 			}
+			out := strings.TrimSpace(decision)
 			if strings.TrimSpace(reason) != "" {
-				return strings.TrimSpace(decision) + " " + strings.TrimSpace(reason)
+				out = out + " " + strings.TrimSpace(reason)
 			}
-			return strings.TrimSpace(decision)
+			if estimated, ok := m["estimated"].(map[string]any); ok {
+				cal := getFloat(estimated["calories"])
+				if cal > 0 {
+					out = out + fmt.Sprintf(" (~%.0f kcal)", cal)
+				}
+			}
+			return strings.TrimSpace(out)
 		}
 	case "get_food_nutrition":
 		if m, ok := r.Response.(map[string]any); ok {
@@ -1159,22 +1194,20 @@ func (o *Orchestrator) executeToolAndRespond(s *Session, state *models.Conversat
 		return false
 	}
 	parsed := parseToolResponse(resp)
-	if ok, errCode := validateMutatingToolAck(toolName, parsed); !ok {
-		reply := "Something went wrong while saving your request. Nothing was saved. Please retry."
-		o.replySafe(s, reply)
-		o.persistTurnAndStateAtomic(s.User.ID, userText, reply, state, intent, "", reply)
-		s.Logger.Error("Mutating tool acknowledgment validation failed", "tool", toolName, "error_code", errCode, "trace_id", newTraceID())
-		return true
-	}
+		if ok, errCode := validateMutatingToolAck(toolName, parsed); !ok {
+			reply := "Something went wrong while saving your request. Nothing was saved. Please retry."
+			o.finalizeReply(s, state, userText, reply, intent, "", reply)
+			s.Logger.Error("Mutating tool acknowledgment validation failed", "tool", toolName, "error_code", errCode, "trace_id", newTraceID())
+			return true
+		}
 	result := []toolExecutionResult{{ToolName: toolName, Response: parsed}}
 	reply := deterministicToolReply(result)
 	if reply == "" || reply == "Done." {
 		reply = "Done."
 	}
-	o.replySafe(s, reply)
-	o.persistTurnAndStateAtomic(s.User.ID, userText, reply, state, intent, toolName, resp)
-	return true
-}
+		o.finalizeReply(s, state, userText, reply, intent, toolName, resp)
+		return true
+	}
 
 func asString(v any) string {
 	s, _ := v.(string)
@@ -1349,7 +1382,7 @@ func (o *Orchestrator) appendAssistantMessage(userID uint, assistantText string)
 	}
 }
 
-func (o *Orchestrator) persistTurnAndStateAtomic(userID uint, userText, assistantText string, st *models.ConversationState, intent, toolName, toolResult string) {
+func (o *Orchestrator) persistTurnAndStateAtomic(messageID string, userID uint, userText, assistantText string, st *models.ConversationState, intent, toolName, toolResult string) {
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		var conv models.Conversation
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", userID).First(&conv).Error; err != nil && err != gorm.ErrRecordNotFound {
@@ -1391,6 +1424,21 @@ func (o *Orchestrator) persistTurnAndStateAtomic(userID uint, userText, assistan
 				return err
 			}
 		}
+
+		// Update deterministic per-message turn ledger when available.
+		if strings.TrimSpace(messageID) != "" {
+			if err := tx.Model(&models.ConversationTurn{}).
+				Where("message_id = ? AND status IN ?", strings.TrimSpace(messageID), []string{"processing", "received", "retryable"}).
+				Updates(map[string]any{
+					"assistant_text": strings.TrimSpace(assistantText),
+					"status":         "completed",
+					"last_intent":    strings.TrimSpace(intent),
+					"last_tool":      strings.TrimSpace(toolName),
+					"updated_at":     time.Now(),
+				}).Error; err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -1425,11 +1473,10 @@ func (o *Orchestrator) tryResolvePendingMealSelection(s *Session, st *models.Con
 		if last < 0 {
 			last = 0
 		}
-		reply := buildPendingSelectionOptionsReply(s.User.ID, ids, last)
-		o.replySafe(s, reply)
-		o.appendConversationTurn(s.User.ID, text, reply)
-		return true
-	}
+			reply := buildPendingSelectionOptionsReply(s.User.ID, ids, last)
+			o.finalizeReply(s, st, text, reply, "pending_meal_resolution_prompt", "", reply)
+			return true
+		}
 
 	var meal models.MealLog
 	if err := database.DB.Where("user_id = ? AND id = ?", s.User.ID, selectedID).First(&meal).Error; err != nil {
@@ -1448,8 +1495,7 @@ func (o *Orchestrator) tryResolvePendingMealSelection(s *Session, st *models.Con
 		newIngredients, _ := meta["pending_update_ingredients"].(string)
 		if strings.TrimSpace(newIngredients) == "" {
 			reply := "I need the corrected ingredients before I can update this meal. Please resend the correction."
-			o.replySafe(s, reply)
-			o.appendConversationTurn(s.User.ID, text, reply)
+			o.finalizeReply(s, st, text, reply, "pending_meal_resolution_prompt", "", reply)
 			return true
 		}
 		args["new_ingredients"] = newIngredients
@@ -1465,8 +1511,7 @@ func (o *Orchestrator) tryResolvePendingMealSelection(s *Session, st *models.Con
 	if reply == "" || reply == "Done." {
 		reply = "Done."
 	}
-	o.replySafe(s, reply)
-	o.persistTurnAndStateAtomic(s.User.ID, text, reply, st, "pending_meal_resolution", "modify_logged_meal", resp)
+	o.finalizeReply(s, st, text, reply, "pending_meal_resolution", "modify_logged_meal", resp)
 	return true
 }
 
@@ -1519,6 +1564,206 @@ func shouldInterruptPendingSelection(text string) bool {
 	return false
 }
 
+func (o *Orchestrator) tryMealParserV1Log(s *Session, st *models.ConversationState, text, userContext string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" || looksLikeQuestion(lower) || isDeleteIntent(lower) || isUpdateIntent(lower) {
+		return false
+	}
+	if !isMealLogIntent(lower) && !strings.Contains(lower, "breakfast") && !strings.Contains(lower, "lunch") && !strings.Contains(lower, "dinner") && !strings.Contains(lower, "snack") {
+		return false
+	}
+	client := llm.NewClient()
+	s.Logger.Info("Meal parser v1 input", "mode", strings.ToLower(strings.TrimSpace(config.GetEnv("MEAL_PARSER_V1_MODE", "control"))), "text", truncateForLog(text, 1200), "user_context", truncateForLog(userContext, 1200))
+	parsed, err := client.ParseMealV1(text, userContext)
+	if err != nil || parsed == nil {
+		if err != nil {
+			s.Logger.Warn("Meal parser v1 failed", "error", err)
+		}
+		return false
+	}
+	s.Logger.Info("Meal parser v1 output", "meal_type", parsed.MealType, "item_count", len(parsed.ParsedItems), "clarification_needed", parsed.ClarificationNeeded, "items", summarizeParsedItemsForLog(parsed))
+	if parsed.ClarificationNeeded {
+		msg := "I need one clarification before logging this meal."
+		if parsed.ClarificationQ != nil && strings.TrimSpace(*parsed.ClarificationQ) != "" {
+			msg = strings.TrimSpace(*parsed.ClarificationQ)
+		}
+		o.finalizeReply(s, st, text, msg, "meal_parser_v1_clarification", "", msg)
+		return true
+	}
+	if len(parsed.ParsedItems) == 0 {
+		return false
+	}
+	mealType := canonicalMealTypeFromParsed(parsed.MealType)
+	meals := make([]interface{}, 0, len(parsed.ParsedItems))
+	for _, item := range parsed.ParsedItems {
+		if strings.TrimSpace(item.FoodName) == "" {
+			continue
+		}
+		u := canonicalQuantityUnit(item.Unit)
+		ingredientText := buildIngredientsTextFromParsedItem(item)
+		mealItem := map[string]interface{}{
+			"dish_name":                    strings.TrimSpace(item.FoodName),
+			"food_name":                    strings.TrimSpace(item.FoodName),
+			"ingredients":                  ingredientText,
+			"raw_text":                     strings.TrimSpace(item.RawText),
+			"meal_type":                    mealType,
+			"quantity_value":               item.Quantity,
+			"quantity_unit":                u,
+			"cooking_method":               strings.TrimSpace(item.CookingMethod),
+			"modifiers":                    item.Modifiers,
+			"assumptions":                  item.Assumptions,
+			"confidence":                   strings.TrimSpace(item.Confidence),
+			"quantity_in_grams_estimated": 0.0,
+		}
+		if len(item.Ingredients) > 0 {
+			ings := make([]map[string]interface{}, 0, len(item.Ingredients))
+			for _, ing := range item.Ingredients {
+				ings = append(ings, map[string]interface{}{
+					"name":      strings.TrimSpace(ing.Name),
+					"quantity":  ing.Quantity,
+					"unit":      canonicalQuantityUnit(ing.Unit),
+					"brand":     strings.TrimSpace(ing.Brand),
+					"calories":  ing.Calories,
+					"protein_g": ing.ProteinG,
+					"carbs_g":   ing.CarbsG,
+					"fat_g":     ing.FatG,
+					"fiber_g":   ing.FiberG,
+				})
+			}
+			mealItem["ingredients_structured"] = ings
+			mealItem["ingredients_source"] = "user_provided"
+		} else if strings.TrimSpace(item.RawText) != "" {
+			mealItem["ingredients_source"] = "inferred"
+		} else {
+			mealItem["ingredients_source"] = "missing"
+		}
+		if item.QuantityInGramsEstimated != nil && *item.QuantityInGramsEstimated > 0 {
+			mealItem["quantity_in_grams_estimated"] = *item.QuantityInGramsEstimated
+		}
+		if strings.TrimSpace(item.Brand) != "" {
+			mealItem["brand"] = strings.TrimSpace(item.Brand)
+		}
+		meals = append(meals, mealItem)
+	}
+	if len(meals) == 0 {
+		return false
+	}
+	args := map[string]interface{}{"meals": meals}
+	return o.executeToolAndRespond(s, st, "meal_parser_v1_log", text, "log_meals", args)
+}
+
+func canonicalMealTypeFromParsed(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "breakfast":
+		return "Breakfast"
+	case "lunch":
+		return "Lunch"
+	case "dinner":
+		return "Dinner"
+	case "snack":
+		return "Snack"
+	default:
+		return "Snack"
+	}
+}
+
+func canonicalQuantityUnit(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "piece":
+		return "pcs"
+	case "scoop":
+		return "scoop"
+	case "g", "gm", "gram", "grams":
+		return "g"
+	case "ml":
+		return "ml"
+	case "tsp":
+		return "tsp"
+	case "tbsp":
+		return "tbsp"
+	case "serving":
+		return "serving"
+	default:
+		return strings.TrimSpace(raw)
+	}
+}
+
+func truncateForLog(in string, max int) string {
+	s := strings.TrimSpace(in)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "...(truncated)"
+}
+
+func summarizeParsedItemsForLog(parsed *llm.MealParserResult) string {
+	if parsed == nil || len(parsed.ParsedItems) == 0 {
+		return "[]"
+	}
+	type itemLog struct {
+		FoodName    string `json:"food_name"`
+		Quantity    string `json:"quantity"`
+		Brand       string `json:"brand"`
+		Ingredients int    `json:"ingredient_count"`
+		Confidence  string `json:"confidence"`
+	}
+	items := make([]itemLog, 0, len(parsed.ParsedItems))
+	for _, it := range parsed.ParsedItems {
+		items = append(items, itemLog{
+			FoodName:    truncateForLog(it.FoodName, 80),
+			Quantity:    strings.TrimSpace(fmt.Sprintf("%.2f %s", it.Quantity, canonicalQuantityUnit(it.Unit))),
+			Brand:       truncateForLog(it.Brand, 60),
+			Ingredients: len(it.Ingredients),
+			Confidence:  strings.TrimSpace(it.Confidence),
+		})
+	}
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return "parse_error"
+	}
+	return truncateForLog(string(raw), 1200)
+}
+
+func buildIngredientsTextFromParsedItem(item llm.MealParserItem) string {
+	if len(item.Ingredients) == 0 {
+		return strings.TrimSpace(item.RawText)
+	}
+	parts := make([]string, 0, len(item.Ingredients))
+	for _, ing := range item.Ingredients {
+		name := strings.TrimSpace(ing.Name)
+		if name == "" {
+			continue
+		}
+		unit := canonicalQuantityUnit(ing.Unit)
+		q := ""
+		if ing.Quantity > 0 {
+			if ing.Quantity == float64(int64(ing.Quantity)) {
+				q = fmt.Sprintf("%d", int64(ing.Quantity))
+			} else {
+				q = fmt.Sprintf("%.2f", ing.Quantity)
+			}
+		}
+		brand := strings.TrimSpace(ing.Brand)
+		if q != "" && unit != "" {
+			if brand != "" {
+				parts = append(parts, fmt.Sprintf("%s %s %s (%s)", q, unit, name, brand))
+			} else {
+				parts = append(parts, fmt.Sprintf("%s %s %s", q, unit, name))
+			}
+			continue
+		}
+		if brand != "" {
+			parts = append(parts, fmt.Sprintf("%s (%s)", name, brand))
+		} else {
+			parts = append(parts, name)
+		}
+	}
+	if len(parts) == 0 {
+		return strings.TrimSpace(item.RawText)
+	}
+	return strings.Join(parts, ", ")
+}
+
 func resolveMealChoiceFromText(text string, ids []uint) (uint, bool) {
 	choice := strings.ToLower(strings.TrimSpace(text))
 	choice = strings.Trim(choice, ".,!?")
@@ -1552,6 +1797,11 @@ func resolveMealChoiceFromText(text string, ids []uint) (uint, bool) {
 		return 0, false
 	}
 	return 0, false
+}
+
+func mealParserV1Enabled() bool {
+	mode := strings.ToLower(strings.TrimSpace(config.GetEnv("MEAL_PARSER_V1_MODE", "control")))
+	return mode == "launch"
 }
 
 func isGoalSetRequest(text string) bool {

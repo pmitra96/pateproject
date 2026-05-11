@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -88,6 +89,40 @@ LIMIT 1;
         return "", ""
     ts, msgs = out.split("\t", 1)
     return ts, msgs
+
+
+def get_turn_reply(db_url: str, msg_id: str) -> Tuple[str, str]:
+    if not msg_id:
+        return "", ""
+    sql = f"""
+SELECT COALESCE(status, ''), COALESCE(assistant_text, '')
+FROM conversation_turns
+WHERE message_id = '{msg_id}'
+ORDER BY id DESC
+LIMIT 1;
+"""
+    out = run_psql(db_url, sql)
+    if "\t" not in out:
+        return "", ""
+    status, reply = out.split("\t", 1)
+    return status.strip(), reply.strip()
+
+
+def get_turn_meta(db_url: str, msg_id: str) -> Tuple[str, str]:
+    if not msg_id:
+        return "", ""
+    sql = f"""
+SELECT COALESCE(last_intent, ''), COALESCE(last_tool, '')
+FROM conversation_turns
+WHERE message_id = '{msg_id}'
+ORDER BY id DESC
+LIMIT 1;
+"""
+    out = run_psql(db_url, sql)
+    if "\t" not in out:
+        return "", ""
+    intent, tool = out.split("\t", 1)
+    return intent.strip(), tool.strip()
 
 
 def get_state_snapshot(db_url: str, phone: str) -> Tuple[str, str]:
@@ -249,68 +284,91 @@ def replay(
     transcript_path: str,
     deterministic_ids: bool,
     assertions: Dict[int, TurnAssertion],
+    output_transcript_path: str,
 ) -> int:
     failures = 0
-    for idx, turn in enumerate(turns, start=1):
-        print(f"You> {turn.user}")
-        baseline_ts, baseline_msgs = get_conversation_snapshot(db_url, phone)
-        baseline_assistant = last_assistant_after_user(baseline_msgs, turn.user)
+    os.makedirs(os.path.dirname(output_transcript_path), exist_ok=True)
+    with open(output_transcript_path, "w", encoding="utf-8") as out_fp:
+        out_fp.write(f"# replay_source: {transcript_path}\n")
+        out_fp.write(f"# base_url: {base_url}\n")
+        out_fp.write(f"# phone: {phone}\n")
+        out_fp.write(f"# started_at: {datetime.datetime.now().isoformat()}\n\n")
 
-        msg_id = None
-        if deterministic_ids:
-            msg_id = stable_message_id(phone, transcript_path, idx, turn.user)
-        if not send_webhook(base_url, phone, turn.user, msg_id=msg_id):
-            print(f"Bot: [ERROR] Failed to send webhook to {base_url}")
-            failures += 1
-            continue
+        def log_line(who: str, text: str) -> None:
+            ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            out_fp.write(f"[{ts}] {who}: {text}\n")
+            out_fp.flush()
 
-        bot_reply = ""
-        started = time.time()
-        while time.time() - started < timeout_sec:
-            cur_ts, cur_msgs = get_conversation_snapshot(db_url, phone)
-            candidate = last_assistant_after_user(cur_msgs, turn.user)
-            changed = (cur_ts != baseline_ts) or (candidate and candidate != baseline_assistant)
-            if candidate and changed:
-                bot_reply = candidate
-                break
-            time.sleep(1)
+        for idx, turn in enumerate(turns, start=1):
+            print(f"You> {turn.user}")
+            log_line("You", turn.user)
+            if deterministic_ids:
+                msg_id = stable_message_id(phone, transcript_path, idx, turn.user)
+            else:
+                msg_id = "local-" + uuid.uuid4().hex
 
-        if not bot_reply:
-            print("Bot: [TIMEOUT] No assistant reply found")
-            failures += 1
-            continue
-
-        print(f"Bot: {bot_reply}")
-        if check_expected and turn.bot is not None:
-            if normalize(turn.bot) != normalize(bot_reply):
+            if not send_webhook(base_url, phone, turn.user, msg_id=msg_id):
+                print(f"Bot: [ERROR] Failed to send webhook to {base_url}")
+                log_line("Bot", f"[ERROR] Failed to send webhook to {base_url}")
                 failures += 1
-                print(f"  MISMATCH[{idx}] expected: {turn.bot}")
-                print(f"  MISMATCH[{idx}] actual  : {bot_reply}")
+                continue
 
-        assertion = assertions.get(idx)
-        if assertion:
-            if assertion.reply_contains and assertion.reply_contains.lower() not in bot_reply.lower():
+            bot_reply = ""
+            started = time.time()
+            while time.time() - started < timeout_sec:
+                status, turn_reply = get_turn_reply(db_url, msg_id)
+                if status in ("completed", "replied") and turn_reply:
+                    bot_reply = turn_reply
+                    break
+                time.sleep(1)
+
+            if not bot_reply:
+                print("Bot: [TIMEOUT] No assistant reply found")
+                log_line("Bot", "[TIMEOUT] No assistant reply found")
                 failures += 1
-                print(f"  ASSERT[{idx}] reply missing fragment: {assertion.reply_contains}")
-            intent, tool = get_state_snapshot(db_url, phone)
-            if assertion.intent and normalize(assertion.intent) != normalize(intent):
-                failures += 1
-                print(f"  ASSERT[{idx}] intent expected={assertion.intent} actual={intent}")
-            if assertion.tool and normalize(assertion.tool) != normalize(tool):
-                failures += 1
-                print(f"  ASSERT[{idx}] tool expected={assertion.tool} actual={tool}")
-            if assertion.quantity_value is not None or assertion.quantity_unit is not None:
-                qv, qu = get_latest_meal_quantity(db_url, phone)
-                if assertion.quantity_value is not None and qv is not None:
-                    if abs(qv - assertion.quantity_value) > 1e-6:
-                        failures += 1
-                        print(f"  ASSERT[{idx}] quantity_value expected={assertion.quantity_value} actual={qv}")
-                if assertion.quantity_unit is not None and normalize(assertion.quantity_unit) != normalize(qu or ""):
+                continue
+
+            print(f"Bot: {bot_reply}")
+            log_line("Bot", bot_reply)
+            turn_intent, turn_tool = get_turn_meta(db_url, msg_id)
+            if turn_intent or turn_tool:
+                log_line("META", f"turn={idx} msg_id={msg_id} intent={turn_intent} tool={turn_tool}")
+            if check_expected and turn.bot is not None:
+                if normalize(turn.bot) != normalize(bot_reply):
                     failures += 1
-                    print(f"  ASSERT[{idx}] quantity_unit expected={assertion.quantity_unit} actual={qu}")
+                    print(f"  MISMATCH[{idx}] expected: {turn.bot}")
+                    print(f"  MISMATCH[{idx}] actual  : {bot_reply}")
+                    log_line("ASSERT", f"MISMATCH[{idx}] expected={turn.bot} actual={bot_reply}")
 
-        if delay_sec > 0:
-            time.sleep(delay_sec)
+            assertion = assertions.get(idx)
+            if assertion:
+                if assertion.reply_contains and assertion.reply_contains.lower() not in bot_reply.lower():
+                    failures += 1
+                    print(f"  ASSERT[{idx}] reply missing fragment: {assertion.reply_contains}")
+                    log_line("ASSERT", f"ASSERT[{idx}] reply missing fragment: {assertion.reply_contains}")
+                intent, tool = get_state_snapshot(db_url, phone)
+                if assertion.intent and normalize(assertion.intent) != normalize(intent):
+                    failures += 1
+                    print(f"  ASSERT[{idx}] intent expected={assertion.intent} actual={intent}")
+                    log_line("ASSERT", f"ASSERT[{idx}] intent expected={assertion.intent} actual={intent}")
+                if assertion.tool and normalize(assertion.tool) != normalize(tool):
+                    failures += 1
+                    print(f"  ASSERT[{idx}] tool expected={assertion.tool} actual={tool}")
+                    log_line("ASSERT", f"ASSERT[{idx}] tool expected={assertion.tool} actual={tool}")
+                if assertion.quantity_value is not None or assertion.quantity_unit is not None:
+                    qv, qu = get_latest_meal_quantity(db_url, phone)
+                    if assertion.quantity_value is not None and qv is not None:
+                        if abs(qv - assertion.quantity_value) > 1e-6:
+                            failures += 1
+                            print(f"  ASSERT[{idx}] quantity_value expected={assertion.quantity_value} actual={qv}")
+                            log_line("ASSERT", f"ASSERT[{idx}] quantity_value expected={assertion.quantity_value} actual={qv}")
+                    if assertion.quantity_unit is not None and normalize(assertion.quantity_unit) != normalize(qu or ""):
+                        failures += 1
+                        print(f"  ASSERT[{idx}] quantity_unit expected={assertion.quantity_unit} actual={qu}")
+                        log_line("ASSERT", f"ASSERT[{idx}] quantity_unit expected={assertion.quantity_unit} actual={qu}")
+
+            if delay_sec > 0:
+                time.sleep(delay_sec)
 
     return failures
 
@@ -328,6 +386,7 @@ def main() -> int:
     ap.add_argument("--deterministic-ids", action="store_true", help="Use stable message IDs so reruns are deduped.")
     ap.add_argument("--reset-before", action="store_true", help="Clear meal/conversation state for this phone before replay.")
     ap.add_argument("--assert-spec", default="", help="Path to JSON assertions keyed by turn.")
+    ap.add_argument("--output-transcript", default="", help="Output path for replay transcript (default: artifacts/chat_sessions/replay_<phone>_<ts>.log)")
     args = ap.parse_args()
 
     turns = parse_transcript(args.transcript)
@@ -360,9 +419,16 @@ def main() -> int:
             print(f"Failed to parse assert spec: {e}")
             return 1
 
+    default_output = os.path.join(
+        os.path.dirname(os.path.abspath(args.transcript)),
+        f"replay_{args.phone}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
+    )
+    output_transcript_path = args.output_transcript.strip() if args.output_transcript else default_output
+
     print(f"Replay turns: {len(turns)}")
     print(f"Base URL: {args.base_url}")
     print(f"Phone: {args.phone}")
+    print(f"Output transcript: {output_transcript_path}")
     if args.reset_before:
         reset_replay_state(db_url, args.phone)
         print("Reset state: meal_logs, meal_components, conversations, conversation_states")
@@ -377,6 +443,7 @@ def main() -> int:
         transcript_path=args.transcript,
         deterministic_ids=args.deterministic_ids,
         assertions=assertions,
+        output_transcript_path=output_transcript_path,
     )
     print(f"Replay done. failures={failures}")
     return 1 if failures else 0

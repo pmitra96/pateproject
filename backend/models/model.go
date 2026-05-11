@@ -176,6 +176,7 @@ type MealComponent struct {
 	UserID     uint           `gorm:"not null;index" json:"user_id"`
 	MealLogID  uint           `gorm:"not null;index" json:"meal_log_id"`
 	Name       string         `gorm:"size:255;not null" json:"name"`
+	Brand      string         `gorm:"size:255" json:"brand"`
 	Quantity   float64        `gorm:"default:0" json:"quantity"`
 	Unit       string         `gorm:"size:32" json:"unit"`
 	Calories   float64        `gorm:"default:0" json:"calories"`
@@ -199,6 +200,21 @@ type Conversation struct {
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// ConversationTurn tracks one inbound user message and its final assistant reply.
+type ConversationTurn struct {
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	UserID        uint      `gorm:"not null;index" json:"user_id"`
+	MessageID     string    `gorm:"size:255;not null;uniqueIndex" json:"message_id"`
+	TurnID        string    `gorm:"size:64;not null;index" json:"turn_id"`
+	UserText      string    `gorm:"type:text" json:"user_text"`
+	AssistantText string    `gorm:"type:text" json:"assistant_text"`
+	Status        string    `gorm:"size:32;not null;index" json:"status"` // received, processing, completed, failed, timed_out, retryable
+	LastIntent    string    `gorm:"size:64" json:"last_intent"`
+	LastTool      string    `gorm:"size:64" json:"last_tool"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // UserPreferences stores user profile and preferences
@@ -309,6 +325,39 @@ type DebugLog struct {
 	Level     string    `gorm:"size:20" json:"level"` // "ERROR", "INFO"
 	Message   string    `gorm:"type:text" json:"message"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// NutritionShadowDiff stores legacy vs v1 sidecar comparison for safe rollout analysis.
+type NutritionShadowDiff struct {
+	ID               uint      `gorm:"primaryKey" json:"id"`
+	UserID           uint      `gorm:"not null;index" json:"user_id"`
+	MessageID        string    `gorm:"size:128;index" json:"message_id"`
+	TraceID          string    `gorm:"size:128;index" json:"trace_id"`
+	ToolName         string    `gorm:"size:64;index" json:"tool_name"`
+	PathLegacy       string    `gorm:"size:32" json:"path_legacy"`
+	PathV1           string    `gorm:"size:32" json:"path_v1"`
+	FoodName         string    `gorm:"size:255" json:"food_name"`
+	QuantityValue    float64   `gorm:"default:0" json:"quantity_value"`
+	QuantityUnit     string    `gorm:"size:32" json:"quantity_unit"`
+	PrepState        string    `gorm:"size:32" json:"prep_state"`
+	LegacyKcal       float64   `gorm:"default:0" json:"legacy_kcal"`
+	V1Kcal           float64   `gorm:"default:0" json:"v1_kcal"`
+	LegacyProtein    float64   `gorm:"default:0" json:"legacy_protein"`
+	V1Protein        float64   `gorm:"default:0" json:"v1_protein"`
+	LegacyCarbs      float64   `gorm:"default:0" json:"legacy_carbs"`
+	V1Carbs          float64   `gorm:"default:0" json:"v1_carbs"`
+	LegacyFat        float64   `gorm:"default:0" json:"legacy_fat"`
+	V1Fat            float64   `gorm:"default:0" json:"v1_fat"`
+	LegacyFiber      float64   `gorm:"default:0" json:"legacy_fiber"`
+	V1Fiber          float64   `gorm:"default:0" json:"v1_fiber"`
+	LegacyConfidence float64   `gorm:"default:0" json:"legacy_confidence"`
+	V1Confidence     float64   `gorm:"default:0" json:"v1_confidence"`
+	Decision         string    `gorm:"size:64;index" json:"decision"`
+	Reason           string    `gorm:"size:128" json:"reason"`
+	KcalAbsDelta     float64   `gorm:"default:0;index" json:"kcal_abs_delta"`
+	QuantityMismatch bool      `gorm:"default:false;index" json:"quantity_mismatch"`
+	RawPayload       string    `gorm:"type:text" json:"raw_payload"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // LLMUsageLog tracks token usage for monitoring and billing

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -92,6 +93,7 @@ func processSingleWhatsAppMessage(message map[string]interface{}) {
 	user, err := GetOrCreateWhatsAppUser(fromPhone)
 	if err != nil {
 		logger.Error("User Provisioning Error", "error", err)
+		markTurnFailed(msgID, "user_provisioning_error")
 		_ = client.SendTextMessage(fromPhone, "Sorry, I had trouble identifying your account.")
 		return
 	}
@@ -99,6 +101,7 @@ func processSingleWhatsAppMessage(message map[string]interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("WhatsApp Panic", "error", r, "msgID", msgID)
+			markTurnFailed(msgID, "panic")
 			_ = client.SendTextMessage(fromPhone, "⚠️ I encountered a technical error. Please try again in a few minutes!")
 		}
 	}()
@@ -139,7 +142,37 @@ func processSingleWhatsAppMessage(message map[string]interface{}) {
 	}
 
 	session := whatsapp.NewSession(user, msgID, logger.L().With("user_id", user.ID, "message_id", msgID))
-	processWhatsAppIntent(session, textBody, imageBase64)
+	if msgID != "" {
+		turnID := "turn-" + msgID
+		session.TurnID = turnID
+		_ = database.DB.Create(&models.ConversationTurn{
+			UserID:    user.ID,
+			MessageID: msgID,
+			TurnID:    turnID,
+			UserText:  textBody,
+			Status:    "received",
+		}).Error
+		if !claimConversationTurnForProcessing(msgID) {
+			logger.Info("Skipping message: turn claim failed", "message_id", msgID, "user_id", user.ID)
+			return
+		}
+	}
+	whatsapp.WithUserTurnLock(user.ID, func() {
+		processWhatsAppIntent(session, textBody, imageBase64)
+	})
+}
+
+func claimConversationTurnForProcessing(messageID string) bool {
+	if strings.TrimSpace(messageID) == "" {
+		return true
+	}
+	res := database.DB.Model(&models.ConversationTurn{}).
+		Where("message_id = ? AND status IN ?", strings.TrimSpace(messageID), []string{"received", "retryable"}).
+		Updates(map[string]any{
+			"status":     "processing",
+			"updated_at": time.Now(),
+		})
+	return res.Error == nil && res.RowsAffected == 1
 }
 
 func persistWebhookIdempotencyKey(key string) bool {
@@ -178,6 +211,19 @@ func fallbackWebhookContentBucketKey(fromPhone, msgType, textBody, mediaID, time
 		strings.TrimSpace(mediaID)
 	sum := sha256.Sum256([]byte(payload))
 	return "content_bucket:" + hex.EncodeToString(sum[:16])
+}
+
+func markTurnFailed(messageID string, reason string) {
+	if strings.TrimSpace(messageID) == "" {
+		return
+	}
+	_ = database.DB.Model(&models.ConversationTurn{}).
+		Where("message_id = ? AND status IN ?", messageID, []string{"received", "processing", "retryable"}).
+		Updates(map[string]any{
+			"status":         "failed",
+			"assistant_text": fmt.Sprintf("failed: %s", strings.TrimSpace(reason)),
+			"updated_at":     time.Now(),
+		}).Error
 }
 
 func GetOrCreateWhatsAppUser(phone string) (*models.User, error) {
