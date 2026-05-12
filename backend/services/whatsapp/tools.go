@@ -2,6 +2,7 @@ package whatsapp
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -21,13 +22,16 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 		return jsonString(map[string]any{"ok": false, "error": "no_meals_detected"}), nil
 	}
 
-	type pendingMealLog struct {
-		Canonical   MealInputV1
-		Ingredients string
-		Estimated   *services.FoodEstimate
-		ControlMode string
-		LoggedAt    time.Time
-	}
+type pendingMealLog struct {
+	Canonical   MealInputV1
+	Ingredients string
+	Estimated   *services.FoodEstimate
+	ControlMode string
+	LoggedAt    time.Time
+	SourceType  string
+	Confidence  float64
+	Components  []map[string]interface{}
+}
 	pending := make([]pendingMealLog, 0, len(meals))
 
 	now := nowForUser(s.User.ID)
@@ -40,16 +44,35 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 	for _, m := range meals {
 		mealData, _ := m.(map[string]interface{})
 		dishName, _ := mealData["dish_name"].(string)
+		foodName, _ := mealData["food_name"].(string)
 		ingredients, _ := mealData["ingredients"].(string)
 		mealType, _ := mealData["meal_type"].(string)
 		rawText, _ := mealData["raw_text"].(string)
 		traceID, _ := mealData["trace_id"].(string)
+		ingredientsSource, _ := mealData["ingredients_source"].(string)
+		confidenceText, _ := mealData["confidence"].(string)
+		if strings.TrimSpace(dishName) == "" {
+			dishName = strings.TrimSpace(foodName)
+		}
 
-		estimated, err := ns.EstimateNutritionFromQuery(s.User.ID, ingredients)
+		brand, _ := mealData["brand"].(string)
+		nutritionQuery := buildNutritionQueryWithBrand(brand, dishName, ingredients)
+		estimated, err := ns.EstimateNutritionFromQuery(s.User.ID, nutritionQuery)
 		if err != nil || estimated == nil {
 			return jsonString(map[string]any{"ok": false, "error": ErrCodeEstimateUnavailable, "dish_name": dishName}), nil
 		}
 		canonical := normalizeMealInputV1(traceID, "tool:log_meals", rawText, dishName, ingredients, mealType, estimated.ServingSize)
+		if qty, ok := explicitMealQuantityFromToolPayload(mealData); ok {
+			canonical.QuantityValue = qty.Value
+			canonical.QuantityUnit = qty.Unit
+			canonical.QuantityBaseValue = qty.BaseValue
+			canonical.QuantityBaseUnit = qty.BaseUnit
+			if strings.TrimSpace(canonical.Assumptions) == "" {
+				canonical.Assumptions = "quantity provided by tool payload"
+			}
+		}
+		estimated = alignEstimateToCanonical(ns, s.User.ID, nutritionQuery, canonical, estimated)
+		estimated.ServingSize = sanitizeServingSize(estimated.ServingSize, canonical)
 		if err := canonical.Validate(true); err != nil {
 			return jsonString(map[string]any{"ok": false, "error": ErrCodeInvalidPayload, "dish_name": dishName}), nil
 		}
@@ -59,6 +82,9 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 			Estimated:   estimated,
 			ControlMode: controlMode,
 			LoggedAt:    now,
+			SourceType:  ingredientSourceOrDefault(ingredientsSource),
+			Confidence:  parserConfidenceToFloat(confidenceText),
+			Components:  readStructuredIngredients(mealData),
 		})
 	}
 
@@ -103,7 +129,7 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 			if err := tx.Where("id = ? AND user_id = ?", mealLog.ID, s.User.ID).First(&check).Error; err != nil {
 				return err
 			}
-			syncMealComponents(s.User.ID, mealLog.ID, pm.Ingredients, estimated)
+			syncMealComponents(s.User.ID, mealLog.ID, pm.Ingredients, estimated, pm.Components, pm.SourceType, pm.Confidence)
 			createdIDs = append(createdIDs, mealLog.ID)
 			entries = append(entries, map[string]any{
 				"meal_id": mealLog.ID, "dish_name": mealLog.Name, "meal_type": mealLog.MealType, "ok": true,
@@ -145,6 +171,94 @@ func HandleLogMeals(s *Session, args map[string]interface{}) (string, error) {
 		res["warning"] = "damage_control_mode"
 	}
 	return jsonString(res), nil
+}
+
+func explicitMealQuantityFromToolPayload(mealData map[string]interface{}) (services.MealQuantity, bool) {
+	rawVal, hasVal := mealData["quantity_value"]
+	rawUnit, hasUnit := mealData["quantity_unit"]
+	if hasVal && hasUnit {
+		val := getFloat(rawVal)
+		unit, _ := rawUnit.(string)
+		unit = strings.TrimSpace(unit)
+		if val > 0 && unit != "" {
+			q := services.ParseMealQuantity(fmt.Sprintf("%v %s", trimFloat(val), unit))
+			if q.Value > 0 && strings.TrimSpace(q.Unit) != "" {
+				return q, true
+			}
+			return services.MealQuantity{Value: val, Unit: unit, BaseValue: val, BaseUnit: unit}, true
+		}
+	}
+	// fallback: explicit gram-equivalent from parser payload
+	if rawGram, ok := mealData["quantity_in_grams_estimated"]; ok {
+		grams := getFloat(rawGram)
+		if grams > 0 {
+			return services.MealQuantity{Value: grams, Unit: "g", BaseValue: grams, BaseUnit: "g"}, true
+		}
+	}
+	return services.MealQuantity{}, false
+}
+
+func trimFloat(v float64) string {
+	if math.Abs(v-math.Round(v)) < 1e-6 {
+		return fmt.Sprintf("%.0f", v)
+	}
+	return fmt.Sprintf("%.2f", v)
+}
+
+func buildNutritionQueryWithBrand(brand, dishName, ingredients string) string {
+	base := strings.TrimSpace(ingredients)
+	if base == "" {
+		base = strings.TrimSpace(dishName)
+	}
+	b := strings.TrimSpace(brand)
+	if b == "" {
+		return base
+	}
+	lowerBase := strings.ToLower(base)
+	lowerBrand := strings.ToLower(b)
+	if strings.Contains(lowerBase, lowerBrand) {
+		return base
+	}
+	return strings.TrimSpace(b + " " + base)
+}
+
+func readStructuredIngredients(mealData map[string]interface{}) []map[string]interface{} {
+	raw, ok := mealData["ingredients_structured"].([]interface{})
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]map[string]interface{}, 0, len(raw))
+	for _, r := range raw {
+		m, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func ingredientSourceOrDefault(s string) string {
+	v := strings.ToLower(strings.TrimSpace(s))
+	switch v {
+	case "user_provided", "inferred", "missing":
+		return v
+	default:
+		return "inferred"
+	}
+}
+
+func parserConfidenceToFloat(v string) float64 {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "high":
+		return 0.9
+	case "medium":
+		return 0.7
+	case "low":
+		return 0.5
+	default:
+		return 0.6
+	}
 }
 
 func HandleSetGoal(s *Session, args map[string]interface{}) (string, error) {
@@ -195,9 +309,12 @@ func HandleAskAdvice(s *Session, args map[string]interface{}) (string, error) {
 	}
 
 	result := services.CheckFoodPermission(state, *estimated)
-	decision := "❌ No, you shouldn't eat this."
-	if result.Status == services.StatusAllow || result.Status == services.StatusAllowWithConstraint {
-		decision = "✅ Yes, you can eat this!"
+	decision := "❌ Not a good fit for today."
+	switch result.Status {
+	case services.StatusAllow:
+		decision = "✅ Yes, you can eat this."
+	case services.StatusAllowWithConstraint:
+		decision = "⚠️ Yes, you can eat this, but keep the portion small."
 	}
 
 	return jsonString(map[string]any{

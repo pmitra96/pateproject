@@ -153,6 +153,7 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 	action, _ := args["action"].(string)
 	targetDish, _ := args["target_dish_name"].(string)
 	newIngredients, _ := args["new_ingredients"].(string)
+	brand, _ := args["brand"].(string)
 	traceID, _ := args["trace_id"].(string)
 	mealID := uint(0)
 	if idNum, ok := args["meal_id"].(float64); ok && idNum > 0 {
@@ -183,6 +184,15 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 
 	case "update":
 		canonical := normalizeMealInputV1(traceID, "tool:modify_logged_meal", newIngredients, targetDish, newIngredients, mealType, "")
+		if qty, ok := explicitMealQuantityFromToolPayload(args); ok {
+			canonical.QuantityValue = qty.Value
+			canonical.QuantityUnit = qty.Unit
+			canonical.QuantityBaseValue = qty.BaseValue
+			canonical.QuantityBaseUnit = qty.BaseUnit
+			if strings.TrimSpace(canonical.Assumptions) == "" {
+				canonical.Assumptions = "quantity provided by tool payload"
+			}
+		}
 		mut.Input = &canonical
 		if err := mut.Validate(); err != nil {
 			return jsonString(map[string]any{"ok": false, "error": ErrCodeInvalidPayload}), nil
@@ -194,14 +204,25 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 			return `{"ok":false,"error":"new_ingredients_required"}`, nil
 		}
 		canonical := normalizeMealInputV1(traceID, "tool:modify_logged_meal", newIngredients, targetDish, newIngredients, mealType, "")
+		if qty, ok := explicitMealQuantityFromToolPayload(args); ok {
+			canonical.QuantityValue = qty.Value
+			canonical.QuantityUnit = qty.Unit
+			canonical.QuantityBaseValue = qty.BaseValue
+			canonical.QuantityBaseUnit = qty.BaseUnit
+			if strings.TrimSpace(canonical.Assumptions) == "" {
+				canonical.Assumptions = "quantity provided by tool payload"
+			}
+		}
 		mut.Input = &canonical
 		if err := mut.Validate(); err != nil {
 			return jsonString(map[string]any{"ok": false, "error": ErrCodeInvalidPayload}), nil
 		}
-		estimated, err := ns.EstimateNutritionFromQuery(s.User.ID, newIngredients)
+		nutritionQuery := buildNutritionQueryWithBrand(brand, targetDish, newIngredients)
+		estimated, err := ns.EstimateNutritionFromQuery(s.User.ID, nutritionQuery)
 		if err != nil || estimated == nil {
 			return jsonString(map[string]any{"ok": false, "error": ErrCodeEstimateUnavailable}), nil
 		}
+		estimated.ServingSize = sanitizeServingSize(estimated.ServingSize, canonical)
 		newMeal := models.MealLog{
 			UserID:      s.User.ID,
 			Name:        canonicalDishName(canonical.ItemName, mealType, newIngredients),
@@ -215,15 +236,23 @@ func HandleModifyMeal(s *Session, args map[string]interface{}) (string, error) {
 			ServingSize: estimated.ServingSize,
 			LoggedAt:    nowForUser(s.User.ID),
 		}
-		if canonical.QuantityValue <= 0 || strings.TrimSpace(canonical.QuantityUnit) == "" {
-			canonical = normalizeMealInputV1(traceID, "tool:modify_logged_meal", newIngredients, targetDish, newIngredients, mealType, estimated.ServingSize)
-		}
+			if canonical.QuantityValue <= 0 || strings.TrimSpace(canonical.QuantityUnit) == "" {
+				canonical = normalizeMealInputV1(traceID, "tool:modify_logged_meal", newIngredients, targetDish, newIngredients, mealType, estimated.ServingSize)
+				if qty, ok := explicitMealQuantityFromToolPayload(args); ok {
+					canonical.QuantityValue = qty.Value
+					canonical.QuantityUnit = qty.Unit
+					canonical.QuantityBaseValue = qty.BaseValue
+					canonical.QuantityBaseUnit = qty.BaseUnit
+				}
+			}
+		estimated = alignEstimateToCanonical(ns, s.User.ID, nutritionQuery, canonical, estimated)
+		estimated.ServingSize = sanitizeServingSize(estimated.ServingSize, canonical)
 		newMeal.QuantityValue = canonical.QuantityValue
 		newMeal.QuantityUnit = canonical.QuantityUnit
 		newMeal.QuantityBaseValue = canonical.QuantityBaseValue
 		newMeal.QuantityBaseUnit = canonical.QuantityBaseUnit
 		database.DB.Create(&newMeal)
-		syncMealComponents(s.User.ID, newMeal.ID, newIngredients, estimated)
+		syncMealComponents(s.User.ID, newMeal.ID, newIngredients, estimated, nil, "inferred", 0.6)
 		return jsonString(map[string]any{"ok": true, "action": "add", "meal_id": newMeal.ID, "dish_name": newMeal.Name, "meal_type": newMeal.MealType, "calories": estimated.Calories, "protein": estimated.Protein, "carbs": estimated.Carbs, "fat": estimated.Fat, "fiber": estimated.Fiber, "serving_size": estimated.ServingSize, "quantity_value": newMeal.QuantityValue, "quantity_unit": newMeal.QuantityUnit}), nil
 	}
 
@@ -391,7 +420,7 @@ func deleteMealsTransactional(s *Session, candidates []models.MealLog, mealType,
 			ids = append(ids, c.ID)
 		}
 		if len(ids) == 0 {
-			return jsonString(map[string]any{"ok": false, "error": "meal_not_found", "meal_type": mealType}), nil
+			return jsonString(map[string]any{"ok": false, "error": "meal_not_found", "error_code": ErrCodeNotFound, "meal_type": mealType}), nil
 		}
 		err := database.DB.Transaction(func(tx *gorm.DB) error {
 			return tx.Where("user_id = ? AND id IN ?", s.User.ID, ids).Delete(&models.MealLog{}).Error
@@ -424,7 +453,7 @@ func deleteMealsTransactional(s *Session, candidates []models.MealLog, mealType,
 			setPendingMealSelection(getConversationState(s.User.ID), "delete", ids, nil)
 			return jsonString(ambiguousMealsPayload(candidates, reason)), nil
 		}
-		return jsonString(map[string]any{"ok": false, "error": reason, "meal_type": mealType, "dish_name": targetDish}), nil
+		return jsonString(map[string]any{"ok": false, "error": reason, "error_code": mapLookupErrorCode(reason), "meal_type": mealType, "dish_name": targetDish}), nil
 	}
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		return tx.Delete(&models.MealLog{}, meal.ID).Error
@@ -435,12 +464,24 @@ func deleteMealsTransactional(s *Session, candidates []models.MealLog, mealType,
 	return jsonString(map[string]any{"ok": true, "action": "delete", "meal_id": meal.ID, "meal_type": meal.MealType, "dish_name": meal.Name}), nil
 }
 
+func mapLookupErrorCode(reason string) string {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "ambiguous_target":
+		return ErrCodeAmbiguousTarget
+	case "meal_not_found":
+		return ErrCodeNotFound
+	default:
+		return ErrCodeInvalidPayload
+	}
+}
+
 func updateMealTransactional(s *Session, ns *services.NutritionService, candidates []models.MealLog, mealType, targetDish, newIngredients string, args map[string]interface{}) (string, error) {
+	brand, _ := args["brand"].(string)
 	var meal models.MealLog
 	var estimatedServingSize string
 	if idNum, ok := args["meal_id"].(float64); ok && idNum > 0 {
 		if err := database.DB.Where("user_id = ? AND id = ?", s.User.ID, uint(idNum)).First(&meal).Error; err != nil {
-			return jsonString(map[string]any{"ok": false, "error": "meal_not_found"}), nil
+			return jsonString(map[string]any{"ok": false, "error": "meal_not_found", "error_code": ErrCodeNotFound}), nil
 		}
 	} else {
 		selected, reason, ok := selectMealForCorrection(candidates, targetDish)
@@ -454,7 +495,7 @@ func updateMealTransactional(s *Session, ns *services.NutritionService, candidat
 				setPendingMealSelection(getConversationState(s.User.ID), "update", ids, meta)
 				return jsonString(ambiguousMealsPayload(candidates, reason)), nil
 			}
-			return jsonString(map[string]any{"ok": false, "error": reason, "meal_type": mealType, "dish_name": targetDish}), nil
+			return jsonString(map[string]any{"ok": false, "error": reason, "error_code": mapLookupErrorCode(reason), "meal_type": mealType, "dish_name": targetDish}), nil
 		}
 		meal = selected
 	}
@@ -483,7 +524,8 @@ func updateMealTransactional(s *Session, ns *services.NutritionService, candidat
 		updates["ingredients"] = newIngredients
 		updatedFields = append(updatedFields, "ingredients")
 		if !manualMacro {
-			estimated, estErr := ns.EstimateNutritionFromQuery(s.User.ID, newIngredients)
+			nutritionQuery := buildNutritionQueryWithBrand(brand, targetDish, newIngredients)
+			estimated, estErr := ns.EstimateNutritionFromQuery(s.User.ID, nutritionQuery)
 			if estErr != nil || estimated == nil {
 				return `{"ok":false,"error":"nutrition_estimation_failed"}`, nil
 			}
@@ -493,8 +535,21 @@ func updateMealTransactional(s *Session, ns *services.NutritionService, candidat
 			updates["fat"] = estimated.Fat
 			updates["fiber"] = estimated.Fiber
 			estimatedServingSize = estimated.ServingSize
-			updates["serving_size"] = estimatedServingSize
 			canonical := normalizeMealInputV1("", "tool:modify_logged_meal", newIngredients, targetDish, newIngredients, mealType, estimatedServingSize)
+			if qty, ok := explicitMealQuantityFromToolPayload(args); ok {
+				canonical.QuantityValue = qty.Value
+				canonical.QuantityUnit = qty.Unit
+				canonical.QuantityBaseValue = qty.BaseValue
+				canonical.QuantityBaseUnit = qty.BaseUnit
+			}
+			estimatedServingSize = sanitizeServingSize(estimatedServingSize, canonical)
+			updates["serving_size"] = estimatedServingSize
+			estimated = alignEstimateToCanonical(ns, s.User.ID, nutritionQuery, canonical, estimated)
+			updates["calories"] = estimated.Calories
+			updates["protein"] = estimated.Protein
+			updates["carbs"] = estimated.Carbs
+			updates["fat"] = estimated.Fat
+			updates["fiber"] = estimated.Fiber
 			qty := services.MealQuantity{
 				Value:     canonical.QuantityValue,
 				Unit:      canonical.QuantityUnit,
@@ -510,7 +565,7 @@ func updateMealTransactional(s *Session, ns *services.NutritionService, candidat
 	}
 
 	if len(updates) == 0 {
-		return `{"ok":false,"error":"target_dish_and_ingredients_required"}`, nil
+		return jsonString(map[string]any{"ok": false, "error": "target_dish_and_ingredients_required", "error_code": ErrCodeTargetDishClarification}), nil
 	}
 
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
@@ -526,7 +581,7 @@ func updateMealTransactional(s *Session, ns *services.NutritionService, candidat
 	if strings.TrimSpace(newIngredients) != "" {
 		estimated, _ := ns.EstimateNutritionFromQuery(s.User.ID, newIngredients)
 		if estimated != nil && !manualMacro {
-			syncMealComponents(s.User.ID, meal.ID, newIngredients, estimated)
+			syncMealComponents(s.User.ID, meal.ID, newIngredients, estimated, nil, "inferred", 0.6)
 		}
 	}
 	var refreshed models.MealLog

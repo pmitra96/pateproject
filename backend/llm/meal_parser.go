@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/pmitra96/pateproject/logger"
 )
 
 type MealParserItem struct {
@@ -73,6 +75,11 @@ func (c *Client) ParseMealV1(userMessage string, userContext string) (*MealParse
 
 	var result MealParserResult
 	if err := json.Unmarshal([]byte(parsed), &result); err != nil {
+		preview := strings.ReplaceAll(parsed, "\n", "\\n")
+		if len(preview) > 1800 {
+			preview = preview[:1800] + "...(truncated)"
+		}
+		logger.Warn("Meal parser JSON unmarshal failed", "error", err.Error(), "raw_preview", preview, "raw_len", len(parsed))
 		return nil, fmt.Errorf("meal parser json parse: %w", err)
 	}
 	if result.ParsedItems == nil {
