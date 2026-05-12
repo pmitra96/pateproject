@@ -50,11 +50,12 @@ type Tool struct {
 }
 
 type ChatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	Temperature float64   `json:"temperature,omitempty"`
-	Tools       []Tool    `json:"tools,omitempty"`
+	Model          string `json:"model"`
+	Messages       []Message `json:"messages"`
+	MaxTokens      int    `json:"max_tokens,omitempty"`
+	Temperature    float64 `json:"temperature,omitempty"`
+	Tools          []Tool `json:"tools,omitempty"`
+	ResponseFormat any    `json:"response_format,omitempty"`
 }
 
 type Choice struct {
@@ -115,6 +116,17 @@ func (c *Client) Chat(messages []Message) (string, Usage, error) {
 
 func (c *Client) ChatWithTools(messages []Message, tools []Tool) (*Message, Usage, error) {
 	return c.provider.ChatWithTools(messages, tools)
+}
+
+// ChatJSON requests a strict JSON response when provider supports it.
+// Falls back to regular Chat for providers/mocks that don't implement JSON mode.
+func (c *Client) ChatJSON(messages []Message) (string, Usage, error) {
+	if jp, ok := c.provider.(interface {
+		ChatJSON(messages []Message) (string, Usage, error)
+	}); ok {
+		return jp.ChatJSON(messages)
+	}
+	return c.provider.Chat(messages)
 }
 
 func loadPromptFile(path string) string {

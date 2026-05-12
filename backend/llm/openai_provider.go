@@ -85,6 +85,62 @@ func (p *OpenAIProvider) Chat(messages []Message) (string, Usage, error) {
 	return contentStr, chatResp.Usage, nil
 }
 
+func (p *OpenAIProvider) ChatJSON(messages []Message) (string, Usage, error) {
+	if p.apiKey == "" {
+		return "", Usage{}, fmt.Errorf("LLM_API_KEY not configured")
+	}
+
+	reqBody := ChatRequest{
+		Model:       p.model,
+		Messages:    messages,
+		MaxTokens:   1200,
+		Temperature: 0.2,
+		ResponseFormat: map[string]any{
+			"type": "json_object",
+		},
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", Usage{}, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", p.baseURL+"/chat/completions", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", Usage{}, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := sharedHTTPClient.Do(req)
+	if err != nil {
+		return "", Usage{}, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", Usage{}, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", Usage{}, fmt.Errorf("OpenAI error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var chatResp ChatResponse
+	if err := json.Unmarshal(body, &chatResp); err != nil {
+		return "", Usage{}, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(chatResp.Choices) == 0 {
+		return "", Usage{}, fmt.Errorf("no response choices returned")
+	}
+
+	contentStr, _ := chatResp.Choices[0].Message.Content.(string)
+	return contentStr, chatResp.Usage, nil
+}
+
 func (p *OpenAIProvider) ChatWithTools(messages []Message, tools []Tool) (*Message, Usage, error) {
 	if p.apiKey == "" {
 		return nil, Usage{}, fmt.Errorf("LLM_API_KEY not configured")
