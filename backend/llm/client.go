@@ -118,11 +118,18 @@ func (c *Client) ChatWithTools(messages []Message, tools []Tool) (*Message, Usag
 }
 
 func loadPromptFile(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
+	candidates := []string{
+		path,
+		filepath.Join("..", path),
+		filepath.Join("..", "..", path),
 	}
-	return strings.TrimSpace(string(data))
+	for _, candidate := range candidates {
+		data, err := os.ReadFile(candidate)
+		if err == nil {
+			return strings.TrimSpace(string(data))
+		}
+	}
+	return ""
 }
 
 // ProcessWhatsAppConversation handles a message and routes it using OpenAI tools with context
@@ -132,7 +139,7 @@ func (c *Client) ProcessWhatsAppConversation(userMessage string, imageBase64 str
 			Type: "function",
 			Function: FunctionDef{
 				Name:        "log_meals",
-				Description: "Log one or more meals or food items. Call this when the user says they ate something.",
+				Description: "Log one or more meals or food items. For each item, include explicit quantity and unit whenever possible.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -145,14 +152,57 @@ func (c *Client) ProcessWhatsAppConversation(userMessage string, imageBase64 str
 										"type":        "string",
 										"description": "Simple name of the dish (e.g. 'Egg Masala').",
 									},
+									"food_name": map[string]any{
+										"type":        "string",
+										"description": "Normalized food name if available.",
+									},
 									"ingredients": map[string]any{
 										"type":        "string",
 										"description": "Detailed ingredients and quantities.",
+									},
+									"raw_text": map[string]any{
+										"type":        "string",
+										"description": "Original raw item text from user input.",
 									},
 									"meal_type": map[string]any{
 										"type":        "string",
 										"enum":        []string{"Breakfast", "Lunch", "Dinner", "Snack"},
 										"description": "The category of the meal.",
+									},
+									"quantity_value": map[string]any{
+										"type":        "number",
+										"description": "Explicit quantity value for this dish.",
+									},
+									"quantity_unit": map[string]any{
+										"type":        "string",
+										"description": "Explicit quantity unit for this dish, e.g. g, ml, piece, scoop, tsp, tbsp, serving.",
+									},
+									"quantity_in_grams_estimated": map[string]any{
+										"type":        "number",
+										"description": "Estimated grams equivalent when direct grams not provided.",
+									},
+									"brand": map[string]any{
+										"type":        "string",
+										"description": "Brand if user specified it.",
+									},
+									"cooking_method": map[string]any{
+										"type":        "string",
+										"description": "Cooking method if known: raw/boiled/steamed/fried/airfried/panfried/restaurant/homemade/unknown.",
+									},
+									"modifiers": map[string]any{
+										"type":        "array",
+										"items":       map[string]any{"type": "string"},
+										"description": "Optional modifiers such as no oil, less oil, butter, fried.",
+									},
+									"assumptions": map[string]any{
+										"type":        "array",
+										"items":       map[string]any{"type": "string"},
+										"description": "Optional estimation assumptions for traceability.",
+									},
+									"confidence": map[string]any{
+										"type":        "string",
+										"enum":        []string{"high", "medium", "low"},
+										"description": "Confidence of this parsed item.",
 									},
 								},
 								"required": []string{"dish_name", "ingredients", "meal_type"},
@@ -223,7 +273,7 @@ func (c *Client) ProcessWhatsAppConversation(userMessage string, imageBase64 str
 			Type: "function",
 			Function: FunctionDef{
 				Name:        "modify_logged_meal",
-				Description: "Update, delete, or add a specific dish to a previously logged meal for today. Use this for partial updates like 'actually, I had 6 eggs instead of 4', 'remove the espresso', or 'I forgot to add an apple to breakfast'.",
+				Description: "Update, delete, or add a specific dish to a previously logged meal for today. Include explicit quantity and unit for add/update whenever possible.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -244,6 +294,14 @@ func (c *Client) ProcessWhatsAppConversation(userMessage string, imageBase64 str
 						"new_ingredients": map[string]any{
 							"type":        "string",
 							"description": "The new description for calculating nutrition (e.g. '6 egg whites'). Required if action is 'add' or 'update'.",
+						},
+						"quantity_value": map[string]any{
+							"type":        "number",
+							"description": "Optional explicit quantity value override for add/update.",
+						},
+						"quantity_unit": map[string]any{
+							"type":        "string",
+							"description": "Optional explicit quantity unit override for add/update.",
 						},
 					},
 					"required": []string{"meal_type", "action"},
